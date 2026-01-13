@@ -4,33 +4,53 @@
  */
 'use client';
 
-import { useState } from 'react';
-
-type DrawingTool = 'trend' | 'horizontal' | 'fibonacci' | 'price' | 'text' | 'rectangle' | 'circle';
+import { DRAWING_TOOLS } from '@/lib/chart';
+import { useChartStore } from '@/stores';
+import type { OverlayType } from '@/types';
 
 export function DrawingSidebar() {
-    const [activeTool, setActiveTool] = useState<DrawingTool>('trend');
+    const { activeDrawingTool, setActiveDrawingTool, clearOverlays } = useChartStore();
 
-    const tools: Array<{ id: DrawingTool; icon: string; label: string }> = [
-        { id: 'trend', icon: '📏', label: 'Trend Line' },
-        { id: 'horizontal', icon: '📐', label: 'Horizontal' },
-        { id: 'fibonacci', icon: '📊', label: 'Fibonacci' },
-        { id: 'price', icon: '💰', label: 'Price Alert' },
-        { id: 'text', icon: '📝', label: 'Text' },
-        { id: 'rectangle', icon: '🔲', label: 'Rectangle' },
-        { id: 'circle', icon: '⭕', label: 'Circle' },
+    const toolIds: OverlayType[] = [
+        'straightLine',
+        'horizontalStraightLine',
+        'fibonacciLine',
+        'priceLine',
+        'simpleAnnotation',
+        'priceChannelLine',
+        'parallelStraightLine',
     ];
+
+    const tools = toolIds.map((id) => ({
+        id,
+        icon: DRAWING_TOOLS[id].icon,
+        label: DRAWING_TOOLS[id].name,
+    }));
+
+    const handleToolSelect = (tool: OverlayType) => {
+        if (activeDrawingTool === tool) {
+            setActiveDrawingTool(null);
+            return;
+        }
+        setActiveDrawingTool(tool);
+    };
+
+    const handleClearAll = () => {
+        if (confirm('Clear all drawings?')) {
+            clearOverlays();
+        }
+    };
 
     return (
         <div className="w-[40px] bg-[var(--bg-secondary)] border-r border-[var(--bg-tertiary)] flex flex-col">
             {tools.map((tool) => (
                 <button
                     key={tool.id}
-                    onClick={() => setActiveTool(tool.id)}
+                    onClick={() => handleToolSelect(tool.id)}
                     className={`
                         w-10 h-10 flex items-center justify-center
                         transition-colors relative group
-                        ${activeTool === tool.id
+                        ${activeDrawingTool === tool.id
                             ? 'bg-[var(--accent-primary)] text-white'
                             : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
                         }
@@ -51,6 +71,7 @@ export function DrawingSidebar() {
 
             {/* Clear All Button */}
             <button
+                onClick={handleClearAll}
                 className="w-10 h-10 flex items-center justify-center hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)] transition-colors"
                 title="Clear All"
             >
