@@ -1,0 +1,264 @@
+/**
+ * KLineChart Configuration
+ */
+import type { Timeframe, IndicatorType } from '@/types';
+
+/**
+ * Timeframe options with display labels
+ */
+export const TIMEFRAME_OPTIONS: { value: Timeframe; label: string; minutes: number }[] = [
+    { value: '1m', label: '1m', minutes: 1 },
+    { value: '5m', label: '5m', minutes: 5 },
+    { value: '15m', label: '15m', minutes: 15 },
+    { value: '30m', label: '30m', minutes: 30 },
+    { value: '1h', label: '1H', minutes: 60 },
+    { value: '4h', label: '4H', minutes: 240 },
+    { value: '1d', label: '1D', minutes: 1440 },
+    { value: '1w', label: '1W', minutes: 10080 },
+];
+
+/**
+ * Indicator configurations
+ */
+export const INDICATOR_CONFIG: Record<IndicatorType, {
+    name: string;
+    description: string;
+    defaultPeriod?: number;
+    pane: 'main' | 'sub';
+}> = {
+    // Moving Averages
+    sma: {
+        name: 'SMA',
+        description: 'Simple Moving Average',
+        defaultPeriod: 20,
+        pane: 'main',
+    },
+    ema: {
+        name: 'EMA',
+        description: 'Exponential Moving Average',
+        defaultPeriod: 12,
+        pane: 'main',
+    },
+    wma: {
+        name: 'WMA',
+        description: 'Weighted Moving Average',
+        defaultPeriod: 20,
+        pane: 'main',
+    },
+    // Oscillators
+    rsi: {
+        name: 'RSI',
+        description: 'Relative Strength Index',
+        defaultPeriod: 14,
+        pane: 'sub',
+    },
+    macd: {
+        name: 'MACD',
+        description: 'Moving Average Convergence Divergence',
+        pane: 'sub',
+    },
+    kdj: {
+        name: 'KDJ',
+        description: 'Stochastic Oscillator',
+        defaultPeriod: 14,
+        pane: 'sub',
+    },
+    cci: {
+        name: 'CCI',
+        description: 'Commodity Channel Index',
+        defaultPeriod: 20,
+        pane: 'sub',
+    },
+    wr: {
+        name: 'WR',
+        description: 'Williams %R',
+        defaultPeriod: 14,
+        pane: 'sub',
+    },
+    // Volatility
+    bollinger: {
+        name: 'BOLL',
+        description: 'Bollinger Bands',
+        defaultPeriod: 20,
+        pane: 'main',
+    },
+    atr: {
+        name: 'ATR',
+        description: 'Average True Range',
+        defaultPeriod: 14,
+        pane: 'sub',
+    },
+    // Trend
+    adx: {
+        name: 'ADX',
+        description: 'Average Directional Index',
+        defaultPeriod: 14,
+        pane: 'sub',
+    },
+    sar: {
+        name: 'SAR',
+        description: 'Parabolic SAR',
+        pane: 'main',
+    },
+    // Volume
+    // Note: VWAP not included - requires custom indicator implementation
+    // Will be added via registerIndicator() in future update
+    obv: {
+        name: 'OBV',
+        description: 'On-Balance Volume',
+        pane: 'sub',
+    },
+};
+
+/**
+ * Drawing tool configurations (KLineChart Overlays)
+ */
+export const DRAWING_TOOLS: Record<
+    string,
+    {
+        name: string;
+        icon: string;
+        description: string;
+        category: 'line' | 'price' | 'advanced' | 'annotation';
+        totalStep: number;
+    }
+> = {
+    // Horizontal Lines
+    horizontalRayLine: {
+        name: 'H Ray',
+        icon: '→',
+        description: 'Horizontal ray line',
+        category: 'line',
+        totalStep: 1,
+    },
+    horizontalSegment: {
+        name: 'H Segment',
+        icon: '⟷',
+        description: 'Horizontal line segment',
+        category: 'line',
+        totalStep: 2,
+    },
+    horizontalStraightLine: {
+        name: 'H Line',
+        icon: '━',
+        description: 'Horizontal infinite line',
+        category: 'line',
+        totalStep: 1,
+    },
+
+    // Vertical Lines
+    verticalRayLine: {
+        name: 'V Ray',
+        icon: '↓',
+        description: 'Vertical ray line',
+        category: 'line',
+        totalStep: 1,
+    },
+    verticalSegment: {
+        name: 'V Segment',
+        icon: '↕',
+        description: 'Vertical line segment',
+        category: 'line',
+        totalStep: 2,
+    },
+    verticalStraightLine: {
+        name: 'V Line',
+        icon: '┃',
+        description: 'Vertical infinite line',
+        category: 'line',
+        totalStep: 1,
+    },
+
+    // Trend Lines
+    rayLine: {
+        name: 'Ray',
+        icon: '📈',
+        description: 'Trend ray line',
+        category: 'line',
+        totalStep: 2,
+    },
+    segment: {
+        name: 'Segment',
+        icon: '/',
+        description: 'Trend line segment',
+        category: 'line',
+        totalStep: 2,
+    },
+    straightLine: {
+        name: 'Trendline',
+        icon: '📊',
+        description: 'Trend infinite line',
+        category: 'line',
+        totalStep: 2,
+    },
+
+    // Price Tools
+    priceLine: {
+        name: 'Price Line',
+        icon: '💲',
+        description: 'Price level line with label',
+        category: 'price',
+        totalStep: 1,
+    },
+    priceChannelLine: {
+        name: 'Channel',
+        icon: '📐',
+        description: 'Price channel (parallel lines)',
+        category: 'price',
+        totalStep: 3,
+    },
+
+    // Advanced Tools
+    parallelStraightLine: {
+        name: 'Parallel',
+        icon: '⫴',
+        description: 'Parallel straight lines',
+        category: 'advanced',
+        totalStep: 3,
+    },
+    fibonacciLine: {
+        name: 'Fibonacci',
+        icon: '🔢',
+        description: 'Fibonacci retracement levels',
+        category: 'advanced',
+        totalStep: 2,
+    },
+
+    // Annotations
+    simpleAnnotation: {
+        name: 'Note',
+        icon: '📝',
+        description: 'Text annotation',
+        category: 'annotation',
+        totalStep: 1,
+    },
+    simpleTag: {
+        name: 'Tag',
+        icon: '🏷️',
+        description: 'Tag marker',
+        category: 'annotation',
+        totalStep: 1,
+    },
+} as const;
+
+/**
+ * Playback speed options
+ */
+export const PLAYBACK_SPEEDS = [
+    { value: 0.5, label: '0.5x' },
+    { value: 1, label: '1x' },
+    { value: 2, label: '2x' },
+    { value: 5, label: '5x' },
+    { value: 10, label: '10x' },
+];
+
+/**
+ * Chart defaults
+ */
+export const CHART_DEFAULTS = {
+    visibleBars: 100,
+    minVisibleBars: 20,
+    maxVisibleBars: 500,
+    volumeHeight: 60,
+    indicatorHeight: 100,
+};
