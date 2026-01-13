@@ -9,17 +9,17 @@ import { AverageCalculator } from './AverageCalculator';
 
 export function CompactToolbar() {
     const {
-        symbol,
+        ticker,
         timeframe,
         indicators,
         replayMode,
         isPlaying,
         playbackSpeed,
-        setSymbol,
+        setTicker,
         setTimeframe,
         toggleIndicator,
         setReplayMode,
-        togglePlayback,
+        setPlaying,
         setPlaybackSpeed,
     } = useChartStore();
 
@@ -29,8 +29,8 @@ export function CompactToolbar() {
         <div className="h-[50px] bg-[var(--bg-secondary)] border-b border-[var(--bg-tertiary)] px-4 flex items-center gap-4">
             {/* Symbol Selector */}
             <select
-                value={symbol}
-                onChange={(e) => setSymbol(e.target.value)}
+                value={ticker}
+                onChange={(e) => setTicker(e.target.value)}
                 className="px-3 py-1.5 bg-[var(--bg-tertiary)] text-[var(--text-primary)] rounded border-none text-sm focus:outline-none focus:ring-1 focus:ring-[var(--accent-primary)]"
             >
                 <option value="AAPL">AAPL</option>
@@ -60,13 +60,13 @@ export function CompactToolbar() {
                 <div className="hidden group-hover:block absolute top-full left-0 mt-1 bg-[var(--bg-secondary)] border border-[var(--bg-tertiary)] rounded shadow-lg py-1 min-w-[140px] z-50">
                     {indicators.map((indicator) => (
                         <label
-                            key={`${indicator.type}-${indicator.period || 'default'}`}
+                            key={indicator.id}
                             className="flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-tertiary)] cursor-pointer text-sm"
                         >
                             <input
                                 type="checkbox"
                                 checked={indicator.enabled}
-                                onChange={() => toggleIndicator(indicator.type)}
+                                onChange={() => toggleIndicator(indicator.id)}
                                 className="w-4 h-4"
                             />
                             <span className="text-[var(--text-primary)] uppercase">
@@ -101,7 +101,7 @@ export function CompactToolbar() {
             {replayMode !== 'live' && (
                 <>
                     <button
-                        onClick={togglePlayback}
+                        onClick={() => setPlaying(!isPlaying)}
                         className="px-3 py-1.5 bg-[var(--accent-primary)] text-white rounded text-sm hover:opacity-90 flex items-center gap-1"
                     >
                         {isPlaying ? '⏸' : '▶'}
