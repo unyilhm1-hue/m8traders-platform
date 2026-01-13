@@ -12,7 +12,7 @@ export function TimelineSlider() {
 
     const isReplayActive = replayMode !== 'live';
     const total = replayData.length;
-    const progress = total > 0 ? (replayIndex / (total - 1)) * 100 : 0;
+    const progress = total > 1 ? (replayIndex / (total - 1)) * 100 : 0;
 
     const handleSliderChange = useCallback(
         (e: React.ChangeEvent<HTMLInputElement>) => {

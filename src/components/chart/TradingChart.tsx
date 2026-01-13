@@ -49,6 +49,7 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
     } = useChartStore();
 
     const [chartData, setChartData] = useState<KLineData[]>([]);
+    const previousDataLengthRef = useRef(0);
     const replayEngineRef = useRef<ReplayEngine | null>(null);
     const isReplayActive = replayMode !== 'live';
 
@@ -146,6 +147,9 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
         const chart = chartInstance.current;
         if (!chart || chartData.length === 0) return;
 
+        const previousLength = previousDataLengthRef.current;
+        const nextLength = chartData.length;
+
         // Debug logging
         console.log('[TradingChart] Applying new data:', {
             count: chartData.length,
@@ -153,7 +157,15 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
             last: chartData[chartData.length - 1],
         });
 
-        chart.applyNewData(chartData);
+        if (previousLength === 0 || nextLength <= 1) {
+            chart.applyNewData(chartData);
+        } else if (nextLength === previousLength + 1) {
+            chart.updateData(chartData[nextLength - 1]);
+        } else {
+            chart.applyNewData(chartData);
+        }
+
+        previousDataLengthRef.current = nextLength;
     }, [chartData]);
 
     // Initialize ReplayEngine when in replay mode
@@ -525,4 +537,3 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
         />
     );
 }
-

@@ -15,7 +15,8 @@ export function ProgressBar() {
     const progressBarRef = useRef<HTMLDivElement>(null);
 
     const isReplayActive = replayMode !== 'live';
-    const progress = replayData.length > 0 ? (replayIndex / (replayData.length - 1)) * 100 : 0;
+    const totalCandles = replayData.length;
+    const progress = totalCandles > 1 ? (replayIndex / (totalCandles - 1)) * 100 : 0;
 
     if (!isReplayActive) {
         return null;

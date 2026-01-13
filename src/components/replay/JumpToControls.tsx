@@ -6,7 +6,7 @@
 
 import { useChartStore } from '@/stores';
 import { UI_ICONS } from '@/lib/chart/icons';
-import { useMemo } from 'react';
+import { findClosestCandleIndex } from '@/lib/replay';
 
 type MarketSession = 'pre-market' | 'open' | 'noon' | 'close' | 'after-hours';
 
@@ -27,7 +27,7 @@ const US_SESSIONS: Record<MarketSession, SessionTime> = {
 };
 
 export function JumpToControls() {
-    const { replayMode, replayData, setReplayIndex } = useChartStore();
+    const { replayMode, replayData, replayIndex, setReplayIndex } = useChartStore();
     const { Sunrise, Bell, Sun, Flag, Moon } = UI_ICONS;
 
     const isReplayActive = replayMode !== 'live';
@@ -38,22 +38,12 @@ export function JumpToControls() {
     const jumpToTime = (hour: number, minute: number) => {
         if (!replayData.length) return;
 
-        const targetTime = new Date();
+        const baseCandle = replayData[Math.min(replayIndex, replayData.length - 1)];
+        const baseDate = baseCandle ? new Date(baseCandle.t) : new Date();
+        const targetTime = new Date(baseDate);
         targetTime.setHours(hour, minute, 0, 0);
-        const targetTimestamp = targetTime.getTime();
 
-        // Find closest candle by timestamp
-        let closestIdx = 0;
-        let closestDiff = Math.abs(replayData[0].t - targetTimestamp);
-
-        for (let i = 1; i < replayData.length; i++) {
-            const diff = Math.abs(replayData[i].t - targetTimestamp);
-            if (diff < closestDiff) {
-                closestDiff = diff;
-                closestIdx = i;
-            }
-        }
-
+        const closestIdx = findClosestCandleIndex(replayData, targetTime.getTime());
         setReplayIndex(closestIdx);
     };
 

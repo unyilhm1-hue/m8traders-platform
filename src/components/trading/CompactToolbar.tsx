@@ -6,7 +6,7 @@
 
 import { useChartStore } from '@/stores';
 import { AverageCalculator } from './AverageCalculator';
-import { JumpToControls, TimelineSlider, MarketTimeSelector } from '@/components/replay';
+import { JumpToControls, JumpToDateTime, TimelineSlider, MarketTimeSelector } from '@/components/replay';
 import { Select } from '@/components/ui/Select';
 import { UI_ICONS } from '@/lib/chart/icons';
 
@@ -163,6 +163,7 @@ export function CompactToolbar() {
 
                         {/* Jump To Controls */}
                         <JumpToControls />
+                        <JumpToDateTime />
                     </>
                 )}
 
