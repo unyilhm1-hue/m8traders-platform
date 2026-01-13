@@ -26,6 +26,16 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
     const chartRef = useRef<HTMLDivElement>(null);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const chartInstance = useRef<any>(null);
+    const indicatorInstancesRef = useRef<
+        Map<
+            string,
+            {
+                indicatorId: string;
+                paneId: string;
+                signature: string;
+            }
+        >
+    >(new Map());
 
     const {
         ticker,
@@ -136,6 +146,7 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
             if (chartRef.current) {
                 dispose(chartRef.current);
                 chartInstance.current = null;
+                indicatorInstancesRef.current.clear();
             }
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -225,27 +236,56 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
         }
     }, [replayIndex, isReplayActive]);
 
-    // Update indicators with FULL CLEAR approach (most reliable per docs)
+    // Update indicators with stored indicator IDs/panes
     useEffect(() => {
         const chart = chartInstance.current;
         if (!chart) return;
 
-        // STEP 1: Clear ALL indicators for clean state
-        try {
-            chart.removeIndicator();
-        } catch (e) {
-            console.warn('[TradingChart] Error clearing indicators:', e);
-        }
+        const enabledIndicators = new Map(
+            indicators.filter((indicator) => indicator.enabled).map((indicator) => [indicator.id, indicator])
+        );
+        const indicatorInstances = indicatorInstancesRef.current;
+
+        indicatorInstances.forEach((instance, indicatorId) => {
+            if (!enabledIndicators.has(indicatorId)) {
+                try {
+                    chart.removeIndicator(instance.indicatorId, instance.paneId);
+                } catch (e) {
+                    console.warn('[TradingChart] Error removing indicator:', e);
+                }
+                indicatorInstances.delete(indicatorId);
+            }
+        });
 
         // STEP 2: Recreate ONLY enabled indicators
         const activeTypes: string[] = [];
+        let hasRsi = false;
+        let hasMacd = false;
 
         indicators.forEach((indicator) => {
             if (indicator.enabled) {
                 try {
+                    const signature = `${indicator.type}:${indicator.period ?? ''}`;
+                    const existing = indicatorInstances.get(indicator.id);
+                    if (existing && existing.signature === signature) {
+                        activeTypes.push(existing.signature.toUpperCase());
+                        if (indicator.type === 'rsi') hasRsi = true;
+                        if (indicator.type === 'macd') hasMacd = true;
+                        return;
+                    }
+
+                    if (existing) {
+                        try {
+                            chart.removeIndicator(existing.indicatorId, existing.paneId);
+                        } catch (e) {
+                            console.warn('[TradingChart] Error removing stale indicator:', e);
+                        }
+                        indicatorInstances.delete(indicator.id);
+                    }
+
                     if (indicator.type === 'sma' || indicator.type === 'ema') {
                         // ✅ Overlay on main candle pane
-                        chart.createIndicator(
+                        const indicatorId = chart.createIndicator(
                             {
                                 name: indicator.type === 'sma' ? 'MA' : 'EMA',
                                 calcParams: [indicator.period],
@@ -253,10 +293,17 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
                             false,
                             { id: 'candle_pane' }
                         );
+                        if (indicatorId) {
+                            indicatorInstances.set(indicator.id, {
+                                indicatorId,
+                                paneId: 'candle_pane',
+                                signature,
+                            });
+                        }
                         activeTypes.push(`${indicator.type.toUpperCase()}(${indicator.period})`);
                     } else if (indicator.type === 'rsi') {
                         // Separate pane for RSI
-                        chart.createIndicator(
+                        const indicatorId = chart.createIndicator(
                             {
                                 name: 'RSI',
                                 calcParams: [indicator.period || 14],
@@ -264,18 +311,34 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
                             false,
                             { id: 'rsi-pane' }
                         );
+                        if (indicatorId) {
+                            indicatorInstances.set(indicator.id, {
+                                indicatorId,
+                                paneId: 'rsi-pane',
+                                signature,
+                            });
+                        }
+                        hasRsi = true;
                         activeTypes.push('RSI(14)');
                     } else if (indicator.type === 'macd') {
                         // Separate pane for MACD
-                        chart.createIndicator(
+                        const indicatorId = chart.createIndicator(
                             'MACD',
                             false,
                             { id: 'macd-pane' }
                         );
+                        if (indicatorId) {
+                            indicatorInstances.set(indicator.id, {
+                                indicatorId,
+                                paneId: 'macd-pane',
+                                signature,
+                            });
+                        }
+                        hasMacd = true;
                         activeTypes.push('MACD');
                     } else if (indicator.type === 'bollinger') {
                         // ✅ Overlay on main pane
-                        chart.createIndicator(
+                        const indicatorId = chart.createIndicator(
                             {
                                 name: 'BOLL',
                                 calcParams: [indicator.period || 20, 2],
@@ -283,14 +346,28 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
                             false,
                             { id: 'candle_pane' }
                         );
+                        if (indicatorId) {
+                            indicatorInstances.set(indicator.id, {
+                                indicatorId,
+                                paneId: 'candle_pane',
+                                signature,
+                            });
+                        }
                         activeTypes.push('BOLL(20,2)');
                     } else if (indicator.type === 'sar') {
                         // ✅ SAR overlays on main pane
-                        chart.createIndicator(
+                        const indicatorId = chart.createIndicator(
                             'SAR',
                             false,
                             { id: 'candle_pane' }
                         );
+                        if (indicatorId) {
+                            indicatorInstances.set(indicator.id, {
+                                indicatorId,
+                                paneId: 'candle_pane',
+                                signature,
+                            });
+                        }
                         activeTypes.push('SAR');
                     }
                 } catch (e) {
@@ -298,6 +375,22 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
                 }
             }
         });
+
+        if (!hasRsi) {
+            try {
+                chart.removeIndicator({ paneId: 'rsi-pane' });
+            } catch (e) {
+                console.warn('[TradingChart] Error clearing RSI pane:', e);
+            }
+        }
+
+        if (!hasMacd) {
+            try {
+                chart.removeIndicator({ paneId: 'macd-pane' });
+            } catch (e) {
+                console.warn('[TradingChart] Error clearing MACD pane:', e);
+            }
+        }
 
         if (activeTypes.length > 0) {
             console.log('[TradingChart] Active indicators:', activeTypes);
@@ -384,4 +477,3 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
         />
     );
 }
-
