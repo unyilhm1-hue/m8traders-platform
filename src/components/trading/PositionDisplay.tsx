@@ -5,7 +5,6 @@
 'use client';
 
 import { useMemo } from 'react';
-import { Card } from '@/components/ui';
 import { useTradingStore } from '@/stores';
 
 interface PositionDisplayProps {
@@ -57,95 +56,74 @@ export function PositionDisplay({ currentPrice, className = '' }: PositionDispla
     };
 
     return (
-        <div className={`space-y-4 ${className}`}>
-            {/* Equity Card */}
-            <Card>
-                <div className="space-y-3">
-                    <div className="flex justify-between items-center">
-                        <span className="text-xs text-[var(--text-tertiary)]">Total Equity</span>
-                        <span className="font-mono font-bold text-lg">
-                            ${totalEquity.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                        </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                        <span className="text-xs text-[var(--text-tertiary)]">Total Return</span>
-                        <span
-                            className={`font-mono font-medium ${totalReturn.absolute >= 0 ? 'text-profit' : 'text-loss'
-                                }`}
-                        >
-                            {formatCurrency(totalReturn.absolute)} ({formatPercent(totalReturn.percentage)})
-                        </span>
+        <div className={`space-y-6 ${className}`}>
+            {/* Equity Summary */}
+            <div className="space-y-4 px-2">
+                <div>
+                    <div className="text-xs text-[var(--text-tertiary)] uppercase tracking-wider mb-1">Total Equity</div>
+                    <div className="text-2xl font-bold font-mono tracking-tight">
+                        ${totalEquity.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </div>
                 </div>
-            </Card>
 
-            {/* Position Card */}
-            {position.shares > 0 && (
-                <Card>
-                    <h4 className="text-sm font-medium mb-3">Current Position</h4>
-                    <div className="space-y-2 text-sm">
-                        <div className="flex justify-between">
-                            <span className="text-[var(--text-tertiary)]">Shares</span>
-                            <span data-testid="position-shares" className="font-mono">{position.shares}</span>
-                        </div>
-                        <div className="flex justify-between">
-                            <span className="text-[var(--text-tertiary)]">Avg Price</span>
-                            <span className="font-mono">${position.avgPrice.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                            <span className="text-[var(--text-tertiary)]">Market Value</span>
-                            <span className="font-mono">
-                                ${(position.shares * currentPrice).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                            </span>
-                        </div>
-                        <div className="flex justify-between pt-2 border-t border-[var(--bg-tertiary)]">
-                            <span className="text-[var(--text-tertiary)]">Unrealized P&L</span>
-                            <span
-                                className={`font-mono font-medium ${unrealizedPnL.absolute >= 0 ? 'text-profit' : 'text-loss'
-                                    }`}
-                            >
-                                {formatCurrency(unrealizedPnL.absolute)} ({formatPercent(unrealizedPnL.percentage)})
-                            </span>
+                <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <div className="text-[10px] text-[var(--text-tertiary)] uppercase mb-1">Return</div>
+                        <div className={`font-mono text-sm font-medium ${totalReturn.absolute >= 0 ? 'text-[var(--color-profit)]' : 'text-[var(--color-loss)]'}`}>
+                            {formatCurrency(totalReturn.absolute)}
                         </div>
                     </div>
-                </Card>
-            )}
+                    <div>
+                        <div className="text-[10px] text-[var(--text-tertiary)] uppercase mb-1">% Return</div>
+                        <div className={`font-mono text-sm font-medium ${totalReturn.absolute >= 0 ? 'text-[var(--color-profit)]' : 'text-[var(--color-loss)]'}`}>
+                            {formatPercent(totalReturn.percentage)}
+                        </div>
+                    </div>
+                </div>
+            </div>
 
-            {/* Trade History */}
-            {recentTrades.length > 0 && (
-                <Card>
-                    <h4 className="text-sm font-medium mb-3">Recent Trades</h4>
-                    <ul data-testid="trade-history" className="space-y-2">
-                        {recentTrades.map((trade) => (
-                            <li
-                                key={trade.id}
-                                className="flex justify-between items-center text-xs"
-                            >
-                                <div className="flex items-center gap-2">
-                                    <span
-                                        className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${trade.type === 'BUY'
-                                                ? 'bg-[var(--color-profit)]/20 text-[var(--color-profit)]'
-                                                : 'bg-[var(--color-loss)]/20 text-[var(--color-loss)]'
-                                            }`}
-                                    >
-                                        {trade.type}
-                                    </span>
-                                    <span className="text-[var(--text-secondary)]">
-                                        {trade.shares} @ ${trade.price.toFixed(2)}
-                                    </span>
-                                </div>
-                                {trade.realizedPnL !== undefined && (
-                                    <span
-                                        className={`font-mono ${trade.realizedPnL >= 0 ? 'text-profit' : 'text-loss'
-                                            }`}
-                                    >
-                                        {formatCurrency(trade.realizedPnL)}
-                                    </span>
-                                )}
-                            </li>
-                        ))}
-                    </ul>
-                </Card>
+            <div className="h-px bg-[var(--bg-tertiary)]/50 mx-2" />
+
+            {/* Current Position */}
+            {position.shares > 0 ? (
+                <div className="px-2 space-y-3">
+                    <h4 className="text-xs font-semibold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Active Position</h4>
+
+                    <div className="grid grid-cols-2 gap-y-3 text-sm">
+                        <div>
+                            <div className="text-[10px] text-[var(--text-tertiary)]">Shares</div>
+                            <div className="font-mono text-[var(--text-primary)]">{position.shares}</div>
+                        </div>
+                        <div>
+                            <div className="text-[10px] text-[var(--text-tertiary)]">Avg Price</div>
+                            <div className="font-mono text-[var(--text-primary)]">${position.avgPrice.toFixed(2)}</div>
+                        </div>
+                        <div>
+                            <div className="text-[10px] text-[var(--text-tertiary)]">Market Value</div>
+                            <div className="font-mono text-[var(--text-primary)]">
+                                ${(position.shares * currentPrice).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            </div>
+                        </div>
+                        <div>
+                            <div className="text-[10px] text-[var(--text-tertiary)]">Unrealized P&L</div>
+                            <div className={`font-mono font-medium ${unrealizedPnL.absolute >= 0 ? 'text-[var(--color-profit)]' : 'text-[var(--color-loss)]'}`}>
+                                {formatCurrency(unrealizedPnL.absolute)}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Quick PnL Percentage Tag */}
+                    <div className={`mt-2 py-1 px-2 rounded text-center text-xs font-bold ${unrealizedPnL.absolute >= 0
+                            ? 'bg-[var(--color-profit)]/10 text-[var(--color-profit)]'
+                            : 'bg-[var(--color-loss)]/10 text-[var(--color-loss)]'
+                        }`}>
+                        {formatPercent(unrealizedPnL.percentage)}
+                    </div>
+                </div>
+            ) : (
+                <div className="px-4 py-8 text-center border-dashed border border-[var(--bg-tertiary)] rounded-lg mx-2 bg-[var(--bg-tertiary)]/10">
+                    <span className="text-xs text-[var(--text-tertiary)]">No active position</span>
+                </div>
             )}
         </div>
     );

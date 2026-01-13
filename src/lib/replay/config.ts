@@ -11,8 +11,10 @@ import type { PlaybackSpeed, ReplayMode } from '@/types';
  * 2x = 2 candles per second
  * 5x = 5 candles per second
  * 10x = 10 candles per second (fast-forward)
+ * 25x = 25 candles per second (very fast)
+ * 50x = 50 candles per second (ultra fast)
  */
-export const PLAYBACK_SPEEDS: readonly PlaybackSpeed[] = [1, 2, 5, 10] as const;
+export const PLAYBACK_SPEEDS: readonly PlaybackSpeed[] = [1, 2, 5, 10, 25, 50] as const;
 
 /**
  * Base interval in milliseconds for 1x speed

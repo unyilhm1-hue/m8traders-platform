@@ -28,12 +28,47 @@ export interface TradingSession {
     updatedAt: Date;
 }
 
+// Order Types
+export type OrderType = 'MARKET' | 'LIMIT' | 'STOP' | 'BRACKET' | 'OTO';
+export type OrderSide = 'BUY' | 'SELL';
+export type OrderStatus = 'PENDING' | 'FILLED' | 'CANCELLED' | 'REJECTED';
+
 export interface OrderRequest {
-    type: 'BUY' | 'SELL';
+    type: OrderSide;
     shares: number;
     price: number;
     stopLoss?: number;
     takeProfit?: number;
+}
+
+/**
+ * Pending Order - Orders waiting to be filled
+ * Supports: LIMIT, STOP, BRACKET (OCO), OTO
+ */
+export interface PendingOrder {
+    id: string;
+    orderType: OrderType;
+    side: OrderSide;
+    shares: number;
+
+    // Price levels
+    limitPrice?: number;      // For LIMIT orders: must reach this price to execute
+    stopPrice?: number;       // For STOP orders: triggers Market order when reached
+
+    // Stop Loss / Take Profit (for BRACKET orders)
+    stopLoss?: number;
+    takeProfit?: number;
+
+    // OCO (One Cancels Other) - for BRACKET orders
+    ocoGroupId?: string;      // If part of OCO, share same group ID
+
+    // OTO (Order Triggers Order)
+    parentOrderId?: string;   // If this is triggered by another order
+    childOrders?: string[];   // Orders that will activate when this fills
+
+    status: OrderStatus;
+    createdAt: number;
+    filledAt?: number;
 }
 
 export interface OrderResult {

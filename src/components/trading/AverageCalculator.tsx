@@ -5,12 +5,16 @@
 'use client';
 
 import { useState } from 'react';
+import { UI_ICONS } from '@/lib/chart/icons';
 
 export function AverageCalculator() {
     const [isOpen, setIsOpen] = useState(false);
     const [entries, setEntries] = useState<Array<{ price: number; shares: number }>>([
         { price: 0, shares: 0 },
     ]);
+    const { Calculator } = UI_ICONS;
+
+    // ... (rest of logic unchanged, just needed the import)
 
     const addEntry = () => {
         setEntries([...entries, { price: 0, shares: 0 }]);
@@ -41,10 +45,17 @@ export function AverageCalculator() {
             {/* Toggle Button */}
             <button
                 onClick={() => setIsOpen(!isOpen)}
-                className="px-3 py-1.5 bg-[var(--bg-tertiary)] text-[var(--text-primary)] rounded text-sm hover:bg-[var(--accent-primary)] hover:text-white transition-colors flex items-center gap-1"
+                className={`
+                    flex items-center gap-2 px-3 py-1.5 rounded transition-all border border-transparent
+                    ${isOpen
+                        ? 'bg-[var(--accent-primary)] text-white shadow-lg shadow-[var(--accent-primary)]/20'
+                        : 'bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] hover:border-[var(--bg-subtle-border)]'
+                    }
+                `}
                 title="Average Calculator"
             >
-                🧮 Calc
+                <Calculator size={14} className={isOpen ? 'text-white' : 'text-[var(--text-secondary)]'} />
+                <span className="text-sm font-medium">Calc</span>
             </button>
 
             {/* Calculator Modal */}

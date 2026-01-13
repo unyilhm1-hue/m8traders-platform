@@ -4,7 +4,7 @@
  */
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { init, dispose } from 'klinecharts';
 import { useChartStore } from '@/stores';
 import {
@@ -225,86 +225,227 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
         }
     }, [replayIndex, isReplayActive]);
 
-    // Update indicators with FULL CLEAR approach (most reliable per docs)
+    // Update indicators with FULL CLEAR approach    // Effect to handle indicator changes
     useEffect(() => {
         const chart = chartInstance.current;
         if (!chart) return;
 
-        // STEP 1: Clear ALL indicators for clean state
+        console.group('🔍 [TradingChart] Indicator Update Triggered');
+        console.log('Current indicators state:', indicators);
+        console.log('Enabled indicators:', indicators.filter(i => i.enabled));
+        console.log('Disabled indicators:', indicators.filter(i => !i.enabled));
+
+        // STEP 1: Clear ALL indicators AND their panes (v9 requires explicit paneId)
         try {
+            console.log('📌 Step 1: Clearing all indicators...');
+
+            // Method 1: Remove all indicators globally
             chart.removeIndicator();
+            console.log('✅ Removed all indicators globally');
+
+            // Method 2: Explicitly remove from custom panes (v9 workaround for ghost panes)
+            // This ensures panes are actually removed, not just emptied
+            try {
+                chart.removeIndicator('rsi-pane', 'RSI');
+                console.log('✅ Explicitly removed RSI from rsi-pane');
+            } catch (e) {
+                console.warn('Could not remove from rsi-pane:', e);
+            }
+
+            try {
+                chart.removeIndicator('macd-pane', 'MACD');
+                console.log('✅ Explicitly removed MACD from macd-pane');
+            } catch (e) {
+                console.warn('Could not remove from macd-pane:', e);
+            }
+
+            // Method 3: Explicitly remove overlay indicators from main pane
+            // SMA and EMA are overlays on candle_pane, need explicit removal too
+            try {
+                chart.removeIndicator('candle_pane', 'MA');
+                console.log('✅ Explicitly removed MA (SMA) from candle_pane');
+            } catch (e) {
+                console.warn('Could not remove MA from candle_pane:', e);
+            }
+
+            try {
+                chart.removeIndicator('candle_pane', 'EMA');
+                console.log('✅ Explicitly removed EMA from candle_pane');
+            } catch (e) {
+                console.warn('Could not remove EMA from candle_pane:', e);
+            }
+
+
+            // Debug: Check chart state after clear
+            try {
+                const panes = chart.getPanes();
+                console.log('Panes after clear:', panes?.map((p: any) => ({
+                    id: p.id,
+                    state: p.state,
+                    height: p.height
+                })));
+            } catch (e) {
+                console.warn('Could not get panes info:', e);
+            }
         } catch (e) {
-            console.warn('[TradingChart] Error clearing indicators:', e);
+            console.error('❌ Error clearing indicators:', e);
         }
 
         // STEP 2: Recreate ONLY enabled indicators
+        console.log('📌 Step 2: Recreating enabled indicators...');
         const activeTypes: string[] = [];
 
+        // ✅ CRITICAL FIX: Collect all SMA/EMA periods FIRST
+        // KLineChart stores indicators by name per pane - multiple 'MA' creates overwrite!
+        // Solution: Create ONE MA with calcParams: [20, 50] to show both periods
+        const smaPeriods: number[] = [];
+        const emaPeriods: number[] = [];
+
         indicators.forEach((indicator) => {
-            if (indicator.enabled) {
-                try {
-                    if (indicator.type === 'sma' || indicator.type === 'ema') {
-                        // ✅ Overlay on main candle pane
-                        chart.createIndicator(
-                            {
-                                name: indicator.type === 'sma' ? 'MA' : 'EMA',
-                                calcParams: [indicator.period],
-                            },
-                            false,
-                            { id: 'candle_pane' }
-                        );
-                        activeTypes.push(`${indicator.type.toUpperCase()}(${indicator.period})`);
-                    } else if (indicator.type === 'rsi') {
-                        // Separate pane for RSI
-                        chart.createIndicator(
-                            {
-                                name: 'RSI',
-                                calcParams: [indicator.period || 14],
-                            },
-                            false,
-                            { id: 'rsi-pane' }
-                        );
-                        activeTypes.push('RSI(14)');
-                    } else if (indicator.type === 'macd') {
-                        // Separate pane for MACD
-                        chart.createIndicator(
-                            'MACD',
-                            false,
-                            { id: 'macd-pane' }
-                        );
-                        activeTypes.push('MACD');
-                    } else if (indicator.type === 'bollinger') {
-                        // ✅ Overlay on main pane
-                        chart.createIndicator(
-                            {
-                                name: 'BOLL',
-                                calcParams: [indicator.period || 20, 2],
-                            },
-                            false,
-                            { id: 'candle_pane' }
-                        );
-                        activeTypes.push('BOLL(20,2)');
-                    } else if (indicator.type === 'sar') {
-                        // ✅ SAR overlays on main pane
-                        chart.createIndicator(
-                            'SAR',
-                            false,
-                            { id: 'candle_pane' }
-                        );
-                        activeTypes.push('SAR');
-                    }
-                } catch (e) {
-                    console.error(`[TradingChart] Failed to create indicator ${indicator.id}:`, e);
+            if (indicator.enabled && indicator.period) {
+                if (indicator.type === 'sma') {
+                    smaPeriods.push(indicator.period);
+                } else if (indicator.type === 'ema') {
+                    emaPeriods.push(indicator.period);
                 }
             }
         });
 
-        if (activeTypes.length > 0) {
-            console.log('[TradingChart] Active indicators:', activeTypes);
-        } else {
-            console.log('[TradingChart] All indicators cleared');
+        // ✅ Sort periods in ascending order (KLineChart may expect this)
+        smaPeriods.sort((a, b) => a - b);
+        emaPeriods.sort((a, b) => a - b);
+
+        // Create SINGLE MA indicator with all SMA periods
+        if (smaPeriods.length > 0) {
+            try {
+                console.log(`Creating MA with periods: [${smaPeriods.join(', ')}]`);
+                const result = chart.createIndicator(
+                    {
+                        name: 'MA',
+                        calcParams: smaPeriods, // ✅ Multiple periods in ONE indicator!
+                    },
+                    true, // overlay
+                    { id: 'candle_pane' }
+                );
+                console.log(`✅ Created MA with ${smaPeriods.length} period(s), result:`, result);
+                smaPeriods.forEach(p => activeTypes.push(`SMA(${p})`));
+            } catch (e) {
+                console.error('❌ Failed to create MA:', e);
+            }
         }
+
+        // Create SINGLE EMA indicator with all EMA periods
+        if (emaPeriods.length > 0) {
+            try {
+                console.log(`Creating EMA with periods: [${emaPeriods.join(', ')}]`);
+                const result = chart.createIndicator(
+                    {
+                        name: 'EMA',
+                        calcParams: emaPeriods, // ✅ Multiple periods in ONE indicator!
+                    },
+                    true, // overlay
+                    { id: 'candle_pane' }
+                );
+                console.log(`✅ Created EMA with ${emaPeriods.length} period(s), result:`, result);
+                emaPeriods.forEach(p => activeTypes.push(`EMA(${p})`));
+            } catch (e) {
+                console.error('❌ Failed to create EMA:', e);
+            }
+        }
+
+        // Process other indicator types normally (one per type)
+        indicators.forEach((indicator) => {
+            if (indicator.enabled) {
+                console.log(`Creating indicator: ${indicator.type}(${indicator.period})`);
+                try {
+                    if (indicator.type === 'rsi') {
+                        // ✅ Separate pane for RSI
+                        const result = chart.createIndicator(
+                            {
+                                name: 'RSI',
+                                calcParams: [indicator.period],
+                            },
+                            false, // not overlay
+                            { id: 'rsi-pane', height: 100 }
+                        );
+                        console.log('✅ Created RSI in separate pane, result:', result);
+                        activeTypes.push('RSI');
+                    } else if (indicator.type === 'macd') {
+                        // ✅ Separate pane for MACD
+                        const result = chart.createIndicator(
+                            {
+                                name: 'MACD',
+                                calcParams: [12, 26, 9],
+                            },
+                            false, // not overlay
+                            { id: 'macd-pane', height: 100 }
+                        );
+                        console.log('✅ Created MACD in separate pane, result:', result);
+                        activeTypes.push('MACD');
+                    } else if (indicator.type === 'bollinger') {
+                        // ✅ Overlay Bollinger Bands
+                        const result = chart.createIndicator(
+                            {
+                                name: 'BOLL',
+                                calcParams: [indicator.period, 2],
+                            },
+                            true, // overlay
+                            { id: 'candle_pane' }
+                        );
+                        console.log('✅ Created BOLLINGER overlay, result:', result);
+                        activeTypes.push('BOLL');
+                    } else if (indicator.type === 'sar') {
+                        // ✅ Overlay SAR
+                        const result = chart.createIndicator(
+                            {
+                                name: 'SAR',
+                                calcParams: [2, 0.02, 0.2],
+                            },
+                            true, // overlay
+                            { id: 'candle_pane' }
+                        );
+                        console.log('✅ Created SAR overlay, result:', result);
+                        activeTypes.push('SAR');
+                    }
+                } catch (e) {
+                    console.error(`❌ Failed to create indicator ${indicator.id}:`, e);
+                }
+            }
+        });
+
+        // Debug: Final check
+        try {
+            const finalPanes = chart.getPanes();
+            console.log('📊 Final panes structure:', finalPanes?.map((p: any) => ({
+                id: p.id,
+                state: p.state,
+                height: p.height,
+                indicators: p.indicators?.length || 0
+            })));
+        } catch (e) {
+            console.warn('Could not get final panes info:', e);
+        }
+
+        if (activeTypes.length > 0) {
+            console.log('✅ Active indicators:', activeTypes);
+        } else {
+            console.log('ℹ️ All indicators cleared');
+        }
+
+        console.groupEnd();
+    }, [indicators]); // TODO: Optimize to only rebuild when structure changes, not colors
+
+    // 🔧 OPTIMIZATION: Track only structural changes (enabled status + periods)
+    // Color-only changes should NOT trigger full rebuild
+    const indicatorStructure = useMemo(() => {
+        return indicators
+            .filter(i => i.enabled)
+            .map(i => `${i.type}-${i.period}`)
+            .sort()
+            .join(',');
     }, [indicators]);
+
+    // FUTURE: Use indicatorStructure as dependency once we implement overrideIndicator for colors
 
     // Price change callback
     useEffect(() => {

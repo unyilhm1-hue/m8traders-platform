@@ -8,21 +8,27 @@ import { useState, useCallback } from 'react';
 import { TradingChart } from '@/components/chart';
 import { DrawingSidebar } from '@/components/chart/DrawingSidebar';
 import { CompactToolbar } from '@/components/trading/CompactToolbar';
-import { OrderPanel, PositionDisplay } from '@/components/trading';
+import { PositionDisplay, PendingOrders } from '@/components/trading';
+import { EnhancedOrderPanel } from '@/components/trading/EnhancedOrderPanel';
+import { MarketDataPanel } from '@/components/market/MarketDataPanel';
+import { PerformanceStats, TradeHistory } from '@/components/analytics';
 import { useChartStore, useTradingStore } from '@/stores';
 import { useKeyboardShortcuts } from '@/hooks';
 
 export default function SimDemoPage() {
     const [currentPrice, setCurrentPrice] = useState(185.5);
-    const [activeTab, setActiveTab] = useState<'position' | 'trades'>('position');
+    const [activeTab, setActiveTab] = useState<'position' | 'pending' | 'trades'>('position');
     const { balance } = useTradingStore();
+    const { checkAndFillOrders } = useTradingStore();
 
     // Enable keyboard shortcuts for replay
     useKeyboardShortcuts();
 
     const handlePriceChange = useCallback((price: number) => {
         setCurrentPrice(price);
-    }, []);
+        // Check and fill pending orders when price changes
+        checkAndFillOrders(price);
+    }, [checkAndFillOrders]);
 
     return (
         <div className="h-screen flex flex-col overflow-hidden">
@@ -42,7 +48,7 @@ export default function SimDemoPage() {
                 </div>
 
                 {/* Right: Trading Panel */}
-                <aside className="w-[280px] bg-[var(--bg-secondary)] border-l border-[var(--bg-tertiary)] flex flex-col overflow-hidden">
+                <aside className="w-[300px] glassmorphism border-l border-[var(--bg-subtle-border)] flex flex-col overflow-hidden bg-[var(--bg-secondary)]/90 backdrop-blur-md">
                     {/* Account Summary (Condensed) */}
                     <div className="p-4 border-b border-[var(--bg-tertiary)]">
                         <div className="flex items-center justify-between mb-3">
@@ -68,25 +74,22 @@ export default function SimDemoPage() {
                     </div>
 
                     {/* Tabs */}
-                    <div className="flex border-b border-[var(--bg-tertiary)]">
-                        <button
-                            onClick={() => setActiveTab('position')}
-                            className={`flex-1 py-2 text-sm font-medium transition-colors ${activeTab === 'position'
-                                    ? 'text-[var(--accent-primary)] border-b-2 border-[var(--accent-primary)]'
-                                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                                }`}
-                        >
-                            Position
-                        </button>
-                        <button
-                            onClick={() => setActiveTab('trades')}
-                            className={`flex-1 py-2 text-sm font-medium transition-colors ${activeTab === 'trades'
-                                    ? 'text-[var(--accent-primary)] border-b-2 border-[var(--accent-primary)]'
-                                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                                }`}
-                        >
-                            Trades
-                        </button>
+                    <div className="flex p-1 gap-1 border-b border-[var(--bg-subtle-border)] bg-[var(--bg-tertiary)]/30 shrink-0">
+                        {(['position', 'pending', 'trades'] as const).map((tab) => (
+                            <button
+                                key={tab}
+                                onClick={() => setActiveTab(tab)}
+                                className={`
+                                    flex-1 py-1.5 text-xs font-medium rounded transition-all capitalize
+                                    ${activeTab === tab
+                                        ? 'bg-[var(--bg-secondary)] text-[var(--accent-primary)] shadow-sm'
+                                        : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/50'
+                                    }
+                                `}
+                            >
+                                {tab}
+                            </button>
+                        ))}
                     </div>
 
                     {/* Tab Content */}
@@ -95,20 +98,26 @@ export default function SimDemoPage() {
                             <div className="p-4">
                                 <PositionDisplay currentPrice={currentPrice} />
                             </div>
+                        ) : activeTab === 'pending' ? (
+                            <PendingOrders />
                         ) : (
-                            <div className="p-4">
-                                <div className="text-xs text-[var(--text-tertiary)] text-center py-4">
-                                    Recent trades will appear here
+                            <>
+                                <PerformanceStats />
+                                <div className="border-t border-[var(--bg-tertiary)]">
+                                    <TradeHistory />
                                 </div>
-                            </div>
+                            </>
                         )}
                     </div>
 
-                    {/* Order Panel */}
+                    {/* Enhanced Order Panel */}
                     <div className="border-t border-[var(--bg-tertiary)]">
-                        <OrderPanel currentPrice={currentPrice} />
+                        <EnhancedOrderPanel currentPrice={currentPrice} />
                     </div>
                 </aside>
+
+                {/* Market Data Panel */}
+                <MarketDataPanel currentPrice={currentPrice} />
             </div>
         </div>
     );

@@ -4,58 +4,86 @@
  */
 'use client';
 
-import { useState } from 'react';
-
-type DrawingTool = 'trend' | 'horizontal' | 'fibonacci' | 'price' | 'text' | 'rectangle' | 'circle';
+import { useChartStore } from '@/stores';
+import { DRAWING_TOOLS } from '@/lib/chart/config';
+import { DRAWING_ICONS, UI_ICONS } from '@/lib/chart/icons';
+import type { OverlayType } from '@/types';
 
 export function DrawingSidebar() {
-    const [activeTool, setActiveTool] = useState<DrawingTool>('trend');
+    const { activeDrawingTool, setActiveDrawingTool, clearDrawings } = useChartStore();
+    const { Trash } = UI_ICONS;
 
-    const tools: Array<{ id: DrawingTool; icon: string; label: string }> = [
-        { id: 'trend', icon: '📏', label: 'Trend Line' },
-        { id: 'horizontal', icon: '📐', label: 'Horizontal' },
-        { id: 'fibonacci', icon: '📊', label: 'Fibonacci' },
-        { id: 'price', icon: '💰', label: 'Price Alert' },
-        { id: 'text', icon: '📝', label: 'Text' },
-        { id: 'rectangle', icon: '🔲', label: 'Rectangle' },
-        { id: 'circle', icon: '⭕', label: 'Circle' },
+    // Select most commonly used tools from the config
+    const selectedTools: OverlayType[] = [
+        'segment',                  // Trend Line
+        'horizontalStraightLine',  // Horizontal Line
+        'fibonacciLine',           // Fibonacci
+        'priceLine',               // Price Line
+        'simpleAnnotation',        // Annotation
+        'priceChannelLine',        // Price Channel
     ];
 
-    return (
-        <div className="w-[40px] bg-[var(--bg-secondary)] border-r border-[var(--bg-tertiary)] flex flex-col">
-            {tools.map((tool) => (
-                <button
-                    key={tool.id}
-                    onClick={() => setActiveTool(tool.id)}
-                    className={`
-                        w-10 h-10 flex items-center justify-center
-                        transition-colors relative group
-                        ${activeTool === tool.id
-                            ? 'bg-[var(--accent-primary)] text-white'
-                            : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
-                        }
-                    `}
-                    title={tool.label}
-                >
-                    <span className="text-lg">{tool.icon}</span>
+    const tools = selectedTools.map(toolId => ({
+        id: toolId,
+        IconComponent: DRAWING_ICONS[toolId] || DRAWING_ICONS['segment'], // Explicitly use Component
+        ...DRAWING_TOOLS[toolId]
+    }));
 
-                    {/* Tooltip */}
-                    <div className="absolute left-full ml-2 px-2 py-1 bg-[var(--bg-primary)] text-xs text-[var(--text-primary)] rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
-                        {tool.label}
+    const handleToolClick = (toolId: OverlayType) => {
+        // Toggle: if clicking the same tool, deactivate it
+        if (activeDrawingTool === toolId) {
+            setActiveDrawingTool(null);
+        } else {
+            setActiveDrawingTool(toolId);
+        }
+    };
+
+    return (
+        <div className="w-[50px] flex flex-col py-3 gap-2 bg-[var(--bg-secondary)] border-r border-[var(--bg-subtle-border)] z-30">
+            {tools.map((tool) => {
+                const Icon = tool.IconComponent;
+                return (
+                    <div key={tool.id} className="relative group flex justify-center px-1">
+                        <button
+                            onClick={() => handleToolClick(tool.id)}
+                            className={`
+                                w-9 h-9 flex items-center justify-center rounded-lg
+                                transition-all duration-200 relative
+                                ${activeDrawingTool === tool.id
+                                    ? 'bg-[var(--accent-primary)] text-white shadow-lg shadow-[var(--accent-primary)]/20 scale-105'
+                                    : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] hover:scale-105'
+                                }
+                            `}
+                        >
+                            <Icon size={20} className="stroke-[1.5]" />
+                        </button>
+
+                        {/* Tooltip (Portal-like absolute positioning) */}
+                        <div className="absolute left-full top-1/2 -translate-y-1/2 ml-3 px-2.5 py-1.5 bg-[var(--bg-secondary)] border border-[var(--bg-subtle-border)] text-xs font-medium text-[var(--text-primary)] rounded-md shadow-xl opacity-0 translate-x-[-5px] group-hover:opacity-100 group-hover:translate-x-0 transition-all pointer-events-none whitespace-nowrap z-50">
+                            {tool.name}
+                            {/* Tiny arrow */}
+                            <div className="absolute top-1/2 -left-[4px] -translate-y-1/2 w-2 h-2 bg-[var(--bg-secondary)] border-l border-b border-[var(--bg-subtle-border)] transform rotate-45" />
+                        </div>
                     </div>
-                </button>
-            ))}
+                );
+            })}
 
             {/* Separator */}
-            <div className="flex-1" />
+            <div className="my-1 mx-3 h-px bg-[var(--bg-tertiary)]" />
 
             {/* Clear All Button */}
-            <button
-                className="w-10 h-10 flex items-center justify-center hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)] transition-colors"
-                title="Clear All"
-            >
-                <span className="text-lg">🗑️</span>
-            </button>
+            <div className="relative group flex justify-center px-1">
+                <button
+                    onClick={clearDrawings}
+                    className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--color-loss)] transition-colors"
+                >
+                    <Trash size={20} className="stroke-[1.5]" />
+                </button>
+                <div className="absolute left-full top-1/2 -translate-y-1/2 ml-3 px-2.5 py-1.5 bg-[var(--bg-secondary)] border border-[var(--bg-subtle-border)] text-xs font-medium text-[var(--text-primary)] rounded-md shadow-xl opacity-0 translate-x-[-5px] group-hover:opacity-100 group-hover:translate-x-0 transition-all pointer-events-none whitespace-nowrap z-50">
+                    Clear Drawings
+                    <div className="absolute top-1/2 -left-[4px] -translate-y-1/2 w-2 h-2 bg-[var(--bg-secondary)] border-l border-b border-[var(--bg-subtle-border)] transform rotate-45" />
+                </div>
+            </div>
         </div>
     );
 }

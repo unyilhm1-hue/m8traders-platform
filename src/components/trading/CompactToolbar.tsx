@@ -6,134 +6,175 @@
 
 import { useChartStore } from '@/stores';
 import { AverageCalculator } from './AverageCalculator';
+import { JumpToControls, TimelineSlider, MarketTimeSelector } from '@/components/replay';
+import { Select } from '@/components/ui/Select';
+import { UI_ICONS } from '@/lib/chart/icons';
 
 export function CompactToolbar() {
     const {
-        symbol,
+        ticker,
         timeframe,
         indicators,
         replayMode,
         isPlaying,
         playbackSpeed,
-        setSymbol,
+        setTicker,
         setTimeframe,
         toggleIndicator,
         setReplayMode,
-        togglePlayback,
+        setPlaying,
         setPlaybackSpeed,
     } = useChartStore();
 
-    const speedOptions = [1, 2, 5, 10];
+    const speedOptions = [
+        { label: '1x', value: '1' },
+        { label: '2x', value: '2' },
+        { label: '5x', value: '5' },
+        { label: '10x', value: '10' },
+        { label: '25x (MPS)', value: '25' },
+        { label: '50x (MPS)', value: '50' },
+    ];
+
+    const timeframeOptions = [
+        { label: '1m', value: '1m' },
+        { label: '5m', value: '5m' },
+        { label: '15m', value: '15m' },
+        { label: '1H', value: '1h' },
+        { label: '1D', value: '1d' },
+    ];
+
+    const tickerOptions = [
+        { label: 'AAPL', value: 'AAPL' },
+        { label: 'BBRI.JK', value: 'BBRI.JK' },
+        { label: 'BBCA.JK', value: 'BBCA.JK' },
+        { label: 'TLKM.JK', value: 'TLKM.JK' },
+    ];
+
+    // Icon components
+    const { Play, Pause, Dropdown, Check, Layers } = UI_ICONS;
 
     return (
-        <div className="h-[50px] bg-[var(--bg-secondary)] border-b border-[var(--bg-tertiary)] px-4 flex items-center gap-4">
-            {/* Symbol Selector */}
-            <select
-                value={symbol}
-                onChange={(e) => setSymbol(e.target.value)}
-                className="px-3 py-1.5 bg-[var(--bg-tertiary)] text-[var(--text-primary)] rounded border-none text-sm focus:outline-none focus:ring-1 focus:ring-[var(--accent-primary)]"
-            >
-                <option value="AAPL">AAPL</option>
-                <option value="BBRI.JK">BBRI</option>
-                <option value="BBCA.JK">BBCA</option>
-                <option value="TLKM.JK">TLKM</option>
-            </select>
+        <div className="glassmorphism border-b border-[var(--bg-subtle-border)] px-4 z-40 relative">
+            {/* Single Row: All Controls */}
+            <div className="h-[56px] flex items-center gap-3 flex-wrap">
+                {/* Symbol Selector */}
+                <Select
+                    value={ticker}
+                    onChange={setTicker}
+                    options={tickerOptions}
+                    className="w-[120px]"
+                    triggerClassName="font-bold text-[var(--text-primary)]"
+                />
 
-            {/* Timeframe Selector */}
-            <select
-                value={timeframe}
-                onChange={(e) => setTimeframe(e.target.value as any)}
-                className="px-3 py-1.5 bg-[var(--bg-tertiary)] text-[var(--text-primary)] rounded border-none text-sm focus:outline-none focus:ring-1 focus:ring-[var(--accent-primary)]"
-            >
-                <option value="1m">1m</option>
-                <option value="5m">5m</option>
-                <option value="15m">15m</option>
-                <option value="1h">1h</option>
-                <option value="1d">1D</option>
-            </select>
+                <div className="w-px h-5 bg-[var(--bg-tertiary)] mx-1" />
 
-            {/* Indicators Dropdown */}
-            <div className="relative group">
-                <button className="px-3 py-1.5 bg-[var(--bg-tertiary)] text-[var(--text-primary)] rounded text-sm hover:bg-[var(--bg-tertiary)]/80 flex items-center gap-1">
-                    Indicators ▼
-                </button>
-                <div className="hidden group-hover:block absolute top-full left-0 mt-1 bg-[var(--bg-secondary)] border border-[var(--bg-tertiary)] rounded shadow-lg py-1 min-w-[140px] z-50">
-                    {indicators.map((indicator) => (
-                        <label
-                            key={`${indicator.type}-${indicator.period || 'default'}`}
-                            className="flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-tertiary)] cursor-pointer text-sm"
+                {/* Timeframe Selector */}
+                <Select
+                    value={timeframe}
+                    onChange={(val) => setTimeframe(val as any)}
+                    options={timeframeOptions}
+                    className="w-[90px]"
+                />
+
+                {/* Indicators Dropdown (Custom implementation for multi-select) */}
+                <div className="relative group">
+                    <button className="flex items-center gap-2 px-3 py-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-hover)] text-[var(--text-primary)] text-sm rounded transition-colors border border-transparent hover:border-[var(--bg-subtle-border)]">
+                        <Layers size={14} className="text-[var(--text-secondary)]" />
+                        <span>Indicators</span>
+                        <Dropdown size={14} className="text-[var(--text-tertiary)]" />
+                    </button>
+                    <div className="hidden group-hover:block absolute top-full left-0 mt-1 bg-[var(--bg-secondary)] border border-[var(--bg-subtle-border)] rounded-lg shadow-xl py-2 min-w-[160px] z-50 animate-in fade-in zoom-in-95 duration-100">
+                        {indicators.map((indicator) => (
+                            <label
+                                key={indicator.id}
+                                className="flex items-center gap-3 px-4 py-2 hover:bg-[var(--bg-tertiary)] cursor-pointer text-sm transition-colors"
+                            >
+                                <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${indicator.enabled ? 'bg-[var(--accent-primary)] border-[var(--accent-primary)]' : 'border-[var(--text-secondary)]'}`}>
+                                    {indicator.enabled && <Check size={10} className="text-white" />}
+                                </div>
+                                <input
+                                    type="checkbox"
+                                    checked={indicator.enabled}
+                                    onChange={() => toggleIndicator(indicator.id)}
+                                    className="hidden"
+                                />
+                                <span className={indicator.enabled ? 'text-[var(--text-primary)] font-medium' : 'text-[var(--text-secondary)]'}>
+                                    {indicator.type}
+                                    {indicator.period ? ` (${indicator.period})` : ''}
+                                </span>
+                            </label>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Average Calculator */}
+                <AverageCalculator />
+
+                {/* Separator */}
+                <div className="w-px h-6 bg-[var(--bg-tertiary)]" />
+
+                {/* Mode Selector */}
+                <div className="flex items-center gap-1 bg-[var(--bg-tertiary)] rounded-lg p-1 border border-[var(--bg-subtle-border)]">
+                    {['live', 'h7', 'h30'].map((mode) => (
+                        <button
+                            key={mode}
+                            onClick={() => setReplayMode(mode as any)}
+                            className={`px-3 py-1 text-xs rounded-md transition-all font-medium ${replayMode === mode
+                                ? 'bg-[var(--bg-secondary)] text-[var(--accent-primary)] shadow-sm'
+                                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]/50'
+                                }`}
                         >
-                            <input
-                                type="checkbox"
-                                checked={indicator.enabled}
-                                onChange={() => toggleIndicator(indicator.type)}
-                                className="w-4 h-4"
-                            />
-                            <span className="text-[var(--text-primary)] uppercase">
-                                {indicator.type}
-                                {indicator.period ? ` (${indicator.period})` : ''}
-                            </span>
-                        </label>
+                            {mode === 'live' ? 'LIVE' : mode === 'h7' ? '7D' : '30D'}
+                        </button>
                     ))}
                 </div>
-            </div>
 
-            {/* Separator */}
-            <div className="w-px h-6 bg-[var(--bg-tertiary)]" />
+                {/* Enhanced Replay Controls */}
+                {replayMode !== 'live' && (
+                    <>
+                        {/* Play/Pause Button */}
+                        <button
+                            onClick={() => setPlaying(!isPlaying)}
+                            className={`
+                                w-8 h-8 flex items-center justify-center rounded-full transition-all
+                                ${isPlaying
+                                    ? 'bg-[var(--accent-primary)] text-white glow-primary hover:bg-[var(--accent-primary)]/90'
+                                    : 'bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
+                                }
+                            `}
+                            title={isPlaying ? 'Pause [Space]' : 'Play [Space]'}
+                        >
+                            {isPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+                        </button>
 
-            {/* Mode Selector */}
-            <div className="flex items-center gap-1 bg-[var(--bg-tertiary)] rounded p-1">
-                {['live', 'h7', 'h30'].map((mode) => (
-                    <button
-                        key={mode}
-                        onClick={() => setReplayMode(mode as any)}
-                        className={`px-2 py-1 text-xs rounded transition-colors ${replayMode === mode
-                            ? 'bg-[var(--accent-primary)] text-white'
-                            : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                            }`}
-                    >
-                        {mode === 'live' ? 'Live' : mode === 'h7' ? '7D' : '30D'}
-                    </button>
-                ))}
-            </div>
+                        {/* Speed Selector */}
+                        <Select
+                            value={String(playbackSpeed)}
+                            onChange={(val) => setPlaybackSpeed(Number(val) as any)}
+                            options={speedOptions}
+                            className="w-[80px]"
+                        />
 
-            {/* Playback Controls */}
-            {replayMode !== 'live' && (
-                <>
-                    <button
-                        onClick={togglePlayback}
-                        className="px-3 py-1.5 bg-[var(--accent-primary)] text-white rounded text-sm hover:opacity-90 flex items-center gap-1"
-                    >
-                        {isPlaying ? '⏸' : '▶'}
-                    </button>
+                        {/* Market Time Selector */}
+                        <MarketTimeSelector />
 
-                    {/* Speed Selector */}
-                    <select
-                        value={playbackSpeed}
-                        onChange={(e) => setPlaybackSpeed(Number(e.target.value) as any)}
-                        className="px-2 py-1.5 bg-[var(--bg-tertiary)] text-[var(--text-primary)] rounded border-none text-sm focus:outline-none"
-                    >
-                        {speedOptions.map((speed) => (
-                            <option key={speed} value={speed}>
-                                {speed}x
-                            </option>
-                        ))}
-                    </select>
-                </>
-            )}
+                        {/* Separator */}
+                        <div className="w-px h-6 bg-[var(--bg-tertiary)]" />
 
-            {/* Flexible Spacer */}
-            <div className="flex-1" />
+                        {/* Jump To Controls */}
+                        <JumpToControls />
+                    </>
+                )}
 
-            {/* Average Calculator */}
-            <AverageCalculator />
+                {/* Flexible Spacer */}
+                <div className="flex-1" />
 
-            {/* Current Price (compact) */}
-            <div className="flex items-center gap-2">
-                <span className="text-xs text-[var(--text-tertiary)]">Price:</span>
-                <span className="text-sm font-semibold text-[var(--text-primary)]">
-                    $144.25
-                </span>
+                {/* Timeline Slider (Compact) */}
+                {replayMode !== 'live' && (
+                    <div className="flex items-center gap-4 mr-4 w-[200px] xl:w-[300px]">
+                        <TimelineSlider />
+                    </div>
+                )}
             </div>
         </div>
     );

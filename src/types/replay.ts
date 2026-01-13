@@ -6,7 +6,7 @@
 import type { Candle } from './chart';
 
 export type ReplayMode = 'live' | 'h7' | 'h30';
-export type PlaybackSpeed = 1 | 2 | 5 | 10;
+export type PlaybackSpeed = 1 | 2 | 5 | 10 | 25 | 50;
 
 export interface ReplayState {
     mode: ReplayMode;
