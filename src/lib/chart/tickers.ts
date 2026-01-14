@@ -64,3 +64,18 @@ export function getTickerBySymbol(symbol: string): Ticker | undefined {
 export function getTickersByMarket(market: 'US' | 'IDX'): Ticker[] {
     return market === 'US' ? US_TICKERS : IDX_TICKERS;
 }
+
+/**
+ * Get random IDX ticker for auto-selection
+ */
+export function getRandomIDXTicker(): Ticker {
+    const randomIndex = Math.floor(Math.random() * IDX_TICKERS.length);
+    return IDX_TICKERS[randomIndex];
+}
+
+/**
+ * Check if ticker symbol is IDX ticker
+ */
+export function isIDXTickerSymbol(symbol: string): boolean {
+    return IDX_TICKERS.some(t => t.symbol === symbol);
+}

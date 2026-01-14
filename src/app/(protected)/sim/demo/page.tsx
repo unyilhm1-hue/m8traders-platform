@@ -4,7 +4,7 @@
  */
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { TradingChart } from '@/components/chart';
 import { DrawingSidebar } from '@/components/chart/DrawingSidebar';
 import { CompactToolbar } from '@/components/trading/CompactToolbar';
@@ -20,9 +20,20 @@ export default function SimDemoPage() {
     const [activeTab, setActiveTab] = useState<'position' | 'pending' | 'trades'>('position');
     const { balance } = useTradingStore();
     const { checkAndFillOrders } = useTradingStore();
+    const { setRandomIDXTicker, setReplayMode } = useChartStore();
 
     // Enable keyboard shortcuts for replay
     useKeyboardShortcuts();
+
+    // NEW: Initialize random IDX ticker and set replay mode on mount (CLIENT-SIDE ONLY)
+    useEffect(() => {
+        // Only run on client-side to avoid hydration mismatch
+        if (typeof window !== 'undefined') {
+            setRandomIDXTicker(); // Select random IDX ticker
+            setReplayMode('h30'); // Enable 30-day replay mode for auto-play
+            console.log('[SimDemo] Auto-play initialized with random IDX ticker');
+        }
+    }, []); // Empty dependency array = run once on mount
 
     const handlePriceChange = useCallback((price: number) => {
         setCurrentPrice(price);

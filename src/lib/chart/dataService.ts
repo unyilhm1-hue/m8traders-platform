@@ -4,6 +4,7 @@
  */
 import type { Candle, Timeframe, StockDataResponse } from '@/types';
 import { getSampleTickerData } from './sampleData';
+import { generateIDX2025Data, isIDXTicker } from './idx2025DataGenerator';
 
 interface CacheEntry {
     data: Candle[];
@@ -147,7 +148,7 @@ function generateTimeframeData(ticker: string, timeframe: Timeframe): Candle[] {
 
 /**
  * Main data fetching function
- * Uses hybrid approach: cache -> API -> sample data fallback
+ * Uses hybrid approach: cache → API → IDX 2025 → sample data fallback
  */
 export async function fetchStockData(
     ticker: string,
@@ -168,7 +169,15 @@ export async function fetchStockData(
         return apiData.data;
     }
 
-    // 3. Fallback to generated sample data
+    // 3. IDX 2025 Generated Data (if IDX ticker) - NEW
+    if (isIDXTicker(ticker)) {
+        console.log(`[DataService] Generating IDX 2025 data: ${ticker} ${timeframe}`);
+        const idx2025 = generateIDX2025Data(ticker, timeframe);
+        updateCache(ticker, timeframe, idx2025);
+        return idx2025;
+    }
+
+    // 4. Fallback to generated sample data (for US tickers)
     console.log(`[DataService] Using generated sample data for ${ticker} ${timeframe}`);
     const sampleData = generateTimeframeData(ticker, timeframe);
     updateCache(ticker, timeframe, sampleData);

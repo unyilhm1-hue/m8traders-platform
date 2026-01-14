@@ -4,7 +4,7 @@
  */
 'use client';
 
-import { forwardRef, type InputHTMLAttributes } from 'react';
+import { forwardRef, useState, useEffect, type InputHTMLAttributes } from 'react';
 
 interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'size'> {
     size?: 'sm' | 'md' | 'lg';
@@ -25,7 +25,16 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
         { size = 'md', label, error, leftIcon, rightIcon, className = '', id, ...props },
         ref
     ) => {
-        const inputId = id || `input-${Math.random().toString(36).substring(7)}`;
+        // Generate stable ID only on client-side to avoid hydration mismatch
+        const [generatedId, setGeneratedId] = useState<string>('');
+
+        useEffect(() => {
+            if (!id && !generatedId) {
+                setGeneratedId(`input-${Math.random().toString(36).substring(7)}`);
+            }
+        }, [id, generatedId]);
+
+        const inputId = id || generatedId;
 
         return (
             <div className="flex flex-col gap-1">

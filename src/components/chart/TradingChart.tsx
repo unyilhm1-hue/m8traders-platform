@@ -167,12 +167,43 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
             return;
         }
 
-        // Create new replay engine
+        // Create new replay engine with tick-by-tick support
         const engine = new ReplayEngine(replayData, {
+            timeframe,
             speed: playbackSpeed,
+            numTicks: 20, // 20 ticks per candle for smooth animation
+            onTickUpdate: (tick) => {
+                // ✅ FIX: Update ONLY the last candle, don't re-render entire chart
+                const partialCandle = engine.getCurrentCandle();
+                const chart = chartInstance.current;
+
+                if (partialCandle && chart) {
+                    try {
+                        // Convert to KLineData format
+                        const klinePartial = toKLineData([partialCandle])[0];
+
+                        // Use updateData to update LAST candle only
+                        // This prevents chart clearing while maintaining smooth animation
+                        chart.updateData(klinePartial);
+
+                        console.log(`[TradingChart] Tick update: ${tick.tickIndex + 1}/20, price: ${tick.price.toFixed(0)}`);
+                    } catch (e) {
+                        console.error('[TradingChart] Error updating tick:', e);
+                    }
+                }
+            },
             onUpdate: (visibleData) => {
-                // Update chart with visible candles
+                // Candle completed → full data sync
                 const klineData = toKLineData(visibleData);
+                const chart = chartInstance.current;
+
+                if (chart) {
+                    // Use applyNewData for full candle completion
+                    chart.applyNewData(klineData);
+                    console.log(`[TradingChart] Candle completed, total: ${visibleData.length}`);
+                }
+
+                // Keep state in sync for other components
                 setChartData(klineData);
             },
             onProgress: (index) => {
@@ -189,10 +220,17 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
         const initialData = toKLineData(engine.getVisibleData());
         setChartData(initialData);
 
+        // Auto-play if isPlaying is already true (race condition fix)
+        // This handles case where user clicked Play before data loaded
+        if (isPlaying) {
+            console.log('[ReplayEngine] Auto-playing after data load (isPlaying was already true)');
+            engine.play();
+        }
+
         return () => {
             engine.destroy();
         };
-    }, [isReplayActive, replayData, playbackSpeed, setReplayIndex]);
+    }, [isReplayActive, replayData, playbackSpeed, setReplayIndex, isPlaying, timeframe]);
 
     // Sync playback state with engine
     useEffect(() => {

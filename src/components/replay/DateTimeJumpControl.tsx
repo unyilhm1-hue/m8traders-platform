@@ -81,6 +81,22 @@ export function DateTimeJumpControl({
         }
     };
 
+    // NEW: Month quick jump (jump to first trading day of month at 09:00)
+    const handleMonthJump = (monthIndex: number) => {
+        const firstDayOfMonth = new Date(2025, monthIndex, 1, 9, 0);
+        setDate(firstDayOfMonth.toISOString().split('T')[0]);
+        setTime('09:00');
+
+        // Auto jump
+        const timestamp = firstDayOfMonth.getTime();
+        onJump(timestamp);
+    };
+
+    const MONTHS_2025 = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+
     return (
         <div className={`flex flex-col gap-2 ${className}`}>
             <div className="flex gap-2 items-center">
@@ -129,6 +145,21 @@ export function DateTimeJumpControl({
                 >
                     Close
                 </button>
+            </div>
+
+            {/* NEW: Month selector */}
+            <div className="flex flex-col gap-1">
+                <label className="text-xs text-gray-400">Jump to Month (2025)</label>
+                <select
+                    onChange={(e) => handleMonthJump(parseInt(e.target.value))}
+                    className="px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm text-white focus:outline-none focus:border-blue-500"
+                    defaultValue=""
+                >
+                    <option value="" disabled>Select month...</option>
+                    {MONTHS_2025.map((month, idx) => (
+                        <option key={idx} value={idx}>{month} 2025</option>
+                    ))}
+                </select>
             </div>
 
             {/* Warning message */}

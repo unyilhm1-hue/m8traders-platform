@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
 import type { Timeframe, Indicator, Drawing, IndicatorType, OverlayType, ChartOverlay, ReplayMode, PlaybackSpeed, Candle } from '@/types';
+import { getRandomIDXTicker } from '@/lib/chart/tickers';
 
 interface ChartState {
     // State
@@ -57,6 +58,7 @@ interface ChartState {
     incrementReplayIndex: () => void;
     resetReplay: () => void;
     reset: () => void;
+    setRandomIDXTicker: () => void;  // NEW: For auto-select on login
 }
 
 const DEFAULT_INDICATORS: Indicator[] = [
@@ -71,13 +73,13 @@ const DEFAULT_INDICATORS: Indicator[] = [
 ];
 
 const initialState = {
-    ticker: 'AAPL',
+    ticker: 'BBRI',  // ← CHANGED: Default to IDX ticker
     timeframe: '5m' as Timeframe,
     indicators: DEFAULT_INDICATORS,
     drawings: [] as Drawing[],
     theme: 'dark' as const,
-    isPlaying: false,
-    playbackSpeed: 1 as PlaybackSpeed,
+    isPlaying: true,  // ← CHANGED: Auto-play enabled
+    playbackSpeed: 2 as PlaybackSpeed,  // ← CHANGED: 2x speed
     loading: false,
     error: null,
     lastUpdate: null,
@@ -234,6 +236,14 @@ export const useChartStore = create<ChartState>()(
                 set((state) => {
                     state.replayIndex = 0;
                     state.isPlaying = false;
+                }),
+
+            // NEW: Set random IDX ticker (called on login)
+            setRandomIDXTicker: () =>
+                set((state) => {
+                    const randomTicker = getRandomIDXTicker();
+                    state.ticker = randomTicker.symbol;
+                    console.log(`[ChartStore] Random IDX ticker selected: ${randomTicker.symbol}`);
                 }),
 
             reset: () => set(initialState),
