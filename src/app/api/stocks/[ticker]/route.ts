@@ -2,10 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import yahooFinance from 'yahoo-finance2';
 import type { Candle } from '@/types';
 
+/**
+ * Yahoo Finance supported intervals
+ */
+type YahooInterval = '1m' | '2m' | '5m' | '15m' | '30m' | '60m' | '90m' | '1h' | '1d' | '5d' | '1wk' | '1mo' | '3mo';
+
 interface RouteParams {
-    params: {
+    params: Promise<{
         ticker: string;
-    };
+    }>;
 }
 
 /**
@@ -16,8 +21,8 @@ interface RouteParams {
  * - timeframe: '1m' | '5m' | '15m' | '30m' | '1h' | '1d' | '1w'
  * - limit: number of candles to fetch (default: 200)
  */
-export async function GET(request: NextRequest, { params }: RouteParams) {
-    const ticker = params.ticker;
+export async function GET(request: NextRequest, context: RouteParams) {
+    const { ticker } = await context.params;
     const { searchParams } = new URL(request.url);
     const timeframe = searchParams.get('timeframe') || '5m';
     const interval = searchParams.get('interval') || timeframe; // Support both params
@@ -34,7 +39,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
         let period1: Date;
         let period2: Date;
-        let yahooInterval: any;
+        let yahooInterval: YahooInterval;
 
         // If custom period provided (batch download), use it
         if (period1Param && period2Param) {
@@ -124,8 +129,8 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 /**
  * Map our timeframe to Yahoo Finance interval
  */
-function mapTimeframeToInterval(timeframe: string): '1m' | '2m' | '5m' | '15m' | '30m' | '60m' | '90m' | '1h' | '1d' | '5d' | '1wk' | '1mo' | '3mo' {
-    const map: Record<string, any> = {
+function mapTimeframeToInterval(timeframe: string): YahooInterval {
+    const map: Record<string, YahooInterval> = {
         '1m': '1m',
         '5m': '5m',
         '15m': '15m',
@@ -134,7 +139,7 @@ function mapTimeframeToInterval(timeframe: string): '1m' | '2m' | '5m' | '15m' |
         '4h': '1h', // Yahoo doesn't have 4h, use 1h
         '1d': '1d',
         '1w': '1wk',
-    };
+    } as const satisfies Record<string, YahooInterval>;
     return map[timeframe] || '5m';
 }
 
