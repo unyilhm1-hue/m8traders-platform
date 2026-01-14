@@ -4,7 +4,7 @@
  */
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { generateWindows, getRecommendedWindowSize } from '@/lib/data/windowCalculator';
 import { downloadMultipleBatches, estimateDownloadTime } from '@/lib/data/batchDownloader';
 import { createScenario } from '@/lib/scenario/scenarioManager';
@@ -29,9 +29,11 @@ export function BatchDownloaderUI() {
     const [success, setSuccess] = useState<string | null>(null);
 
     // Load storage quota on mount
-    useState(() => {
-        updateStorageQuota();
-    });
+    useEffect(() => {
+        updateStorageQuota().catch((err) => {
+            console.error('[BatchDownloader] Failed to load storage quota:', err);
+        });
+    }, []);
 
     const updateStorageQuota = async () => {
         const quota = await getStorageQuota();
@@ -174,8 +176,8 @@ export function BatchDownloaderUI() {
                                 onClick={() => setInterval(int)}
                                 disabled={downloading}
                                 className={`px-3 py-2 text-sm font-medium rounded transition-colors disabled:opacity-50 ${interval === int
-                                        ? 'bg-[var(--accent-primary)] text-white'
-                                        : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
+                                    ? 'bg-[var(--accent-primary)] text-white'
+                                    : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
                                     }`}
                             >
                                 {int}
@@ -258,8 +260,8 @@ export function BatchDownloaderUI() {
                                             onClick={() => setScenarioDifficulty(diff)}
                                             disabled={downloading}
                                             className={`px-3 py-1.5 text-xs font-medium rounded transition-colors disabled:opacity-50 capitalize ${scenarioDifficulty === diff
-                                                    ? 'bg-[var(--accent-primary)] text-white'
-                                                    : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
+                                                ? 'bg-[var(--accent-primary)] text-white'
+                                                : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
                                                 }`}
                                         >
                                             {diff}
