@@ -170,6 +170,10 @@ async function fetchWithRetry(
             lastError = new Error(`Server error: ${response.status}`);
 
         } catch (error: any) {
+            // Immediately stop retrying if it's a client error (4xx)
+            if (error.message && error.message.startsWith('Client error')) {
+                throw error;
+            }
             lastError = error;
         }
 

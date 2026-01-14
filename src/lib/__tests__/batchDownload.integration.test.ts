@@ -271,7 +271,7 @@ describe('Batch Download Integration', () => {
 
             // There should be 2 delays (between 3 batches)
             // Advance timers to let all downloads complete
-            await vi.runAllTimersAsync();
+            await vi.advanceTimersByTimeAsync(5000);
 
             // Wait for the promise to complete
             const results = await downloadPromise;
