@@ -34,8 +34,46 @@ export interface TimeAndSalesEntry {
 
 // Advanced Metrics
 export interface AdvancedMetrics {
-    atr: number;        // Average True Range
-    rvol: number;       // Relative Volume
-    vwap: number;       // Volume Weighted Average Price
+    atr: number; // Average True Range
+    rvol: number; // Relative Volume
+    vwap: number; // Volume Weighted Average Price
     timestamp: number;
 }
+
+// ============================================
+// Synthetic Orderbook System Types
+// ============================================
+
+/**
+ * Configuration untuk generate synthetic orderbook
+ */
+export interface OrderbookConfig {
+    atr: number; // Average True Range (for volatility)
+    numLevels?: number; // default = 10
+    baseSpreadTicks?: number; // default = 2.5
+}
+
+/**
+ * Orderbook Snapshot yang di-generate dari candle data
+ */
+export interface OrderbookSnapshot {
+    bids: OrderBookLevel[];
+    asks: OrderBookLevel[];
+    spread: number;
+    spreadPercent: number;
+    midPrice: number;
+    timestamp: number;
+    lastUpdate?: number;
+}
+
+/**
+ * Market Order Fill Result (dengan slippage calculation)
+ */
+export interface MarketOrderFill {
+    totalFilled: number;
+    avgFillPrice: number;
+    slippagePercent: number;
+    partialFill: boolean;
+    fillDetails: Array<{ price: number; quantity: number }>;
+}
+

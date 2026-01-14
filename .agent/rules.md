@@ -148,6 +148,18 @@ export const useTradingStore = create<TradingState>()(
     { name: 'trading-session' }
   )
 );
+
+### 2.4 UI/UX & CSS Architecture Protocol (Strict)
+
+**Before making any UI/layout changes:**
+1. **Analyze CSS Model**: Identify if the project uses Tailwind, CSS Modules, Styled Components, or plain CSS.
+2. **Respect Architecture**: 
+   - **Tailwind**: Use utility classes (check `tailwind.config`), avoid arbitrary values (`[]`) unless necessary. Maintain `globals.css` structure.
+   - **CSS Modules**: Create/update module files, strict scoping.
+   - **Global CSS**: Check for BEM or specific naming conventions.
+3. **Structure Analysis**: Read the existing HTML/JSX structure to understand nesting and parent-child relationships before moving elements.
+4. **Preserve Codebase**: Do not introduce new CSS frameworks or conflicting patterns (e.g., inline styles vs utilities) without explicit user approval.
+
 ```
 
 ---
@@ -222,6 +234,23 @@ const toKLineData = (candle: Candle): KLineData => ({
   volume: candle.v,
 });
 ```
+
+---
+
+### 3.3 Trading Logic & Experience Protocol
+
+**Collaboration between Coding Agent & Trading Agent is MANDATORY.**
+
+1.  **Professional Realism**:
+    - Trading logic must mirror real exchange mechanics (order books, fill simulations, latency).
+    - UI feedback strings must use industry-standard terminology (e.g., "Partial Fill", "Maker/Taker", "Liquidity").
+2.  **Cross-Agent Validation**:
+    - **Coding Agent**: Focuses on performance, state immutability, and type safety.
+    - **Trading Agent**: Validates the *feel* and *mechanics* (e.g., "Is the order rejection realistic?", "Does the PnL calculation account for commissions?").
+3.  **Experience First**:
+    - Ensure zero layout shift during high-frequency updates.
+    - Numbers must be formatted precisely (ticker specific decimal places).
+    - Visual cues (flashing, color changes) must be instant but not distracting.
 
 ---
 
@@ -391,3 +420,13 @@ For any feature/fix to be complete:
 
 **Last Updated**: 2026-01-12  
 **Version**: 1.0
+
+---
+
+## 10) Model Specific Protocols
+
+For projects determining specialized agent roles:
+
+- **Protocol Source**: See `.agent/workflows/model-division.md`.
+- **Constraint**: The distinct **Coding Agent** vs **Trading Expert Agent** roles defined in the workflow are **ACTIVE ONLY** when using the **Claude Sonnet 4.5 (thinking)** model.
+- **Default Behavior**: For all other models (e.g., Gemini 2.0 Flash/Pro), the agent assumes a Full-Stack Developer role responsible for both implementation and domain logic validation.
