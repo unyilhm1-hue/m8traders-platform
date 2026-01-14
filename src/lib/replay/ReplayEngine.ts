@@ -105,7 +105,7 @@ export class ReplayEngine {
      * Get playback progress (0-100)
      */
     getProgress(): number {
-        if (this.data.length === 0) return 0;
+        if (this.data.length <= 1) return 0;
         return (this.currentIndex / (this.data.length - 1)) * 100;
     }
 

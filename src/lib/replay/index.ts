@@ -12,3 +12,4 @@ export {
     MODE_DESCRIPTIONS,
     getIntervalForSpeed,
 } from './config';
+export { findClosestCandleIndex, formatDateTimeLocal } from './utils';
