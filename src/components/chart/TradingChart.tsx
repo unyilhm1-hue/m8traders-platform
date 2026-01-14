@@ -158,9 +158,12 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
 
     // Initialize ReplayEngine when in replay mode
     useEffect(() => {
+        console.log(`[TradingChart] Engine useEffect triggered - isReplayActive: ${isReplayActive}, replayData: ${replayData.length}, isPlaying: ${isPlaying}`);
+
         if (!isReplayActive || replayData.length === 0) {
             // Clean up engine if switching to live mode
             if (replayEngineRef.current) {
+                console.log('[TradingChart] Destroying engine - switching to live mode');
                 replayEngineRef.current.destroy();
                 replayEngineRef.current = null;
             }
@@ -182,11 +185,22 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
                         // Convert to KLineData format
                         const klinePartial = toKLineData([partialCandle])[0];
 
-                        // Use updateData to update LAST candle only
-                        // This prevents chart clearing while maintaining smooth animation
-                        chart.updateData(klinePartial);
+                        // ✅ FIX: Ensure chart has initial data before updating
+                        // On first tick, use applyNewData to set initial visible data
+                        const visibleData = engine.getVisibleData();
+                        if (tick.tickIndex === 0 && visibleData.length > 0) {
+                            // First tick: apply all visible data including the partial candle
+                            const initialData = [...visibleData.slice(0, -1), partialCandle];
+                            chart.applyNewData(toKLineData(initialData));
+                            console.log(`[TradingChart] Initial data applied: ${initialData.length} candles`);
+                        } else {
+                            // Subsequent ticks: update only last candle
+                            chart.updateData(klinePartial);
+                        }
 
-                        console.log(`[TradingChart] Tick update: ${tick.tickIndex + 1}/20, price: ${tick.price.toFixed(0)}`);
+                        if (tick.tickIndex % 5 === 0) { // Log every 5th tick to reduce noise
+                            console.log(`[TradingChart] Tick ${tick.tickIndex + 1}/20, price: ${tick.price.toFixed(0)}`);
+                        }
                     } catch (e) {
                         console.error('[TradingChart] Error updating tick:', e);
                     }
@@ -220,26 +234,38 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
         const initialData = toKLineData(engine.getVisibleData());
         setChartData(initialData);
 
+        console.log(`[TradingChart] Engine created successfully with ${replayData.length} candles`);
+
         // Auto-play if isPlaying is already true (race condition fix)
         // This handles case where user clicked Play before data loaded
         if (isPlaying) {
             console.log('[ReplayEngine] Auto-playing after data load (isPlaying was already true)');
             engine.play();
+        } else {
+            console.log('[ReplayEngine] Engine created but NOT playing (isPlaying = false)');
         }
 
         return () => {
+            console.log('[TradingChart] Cleaning up engine');
             engine.destroy();
         };
-    }, [isReplayActive, replayData, playbackSpeed, setReplayIndex, isPlaying, timeframe]);
+    }, [isReplayActive, replayData, playbackSpeed, setReplayIndex, timeframe]);
 
     // Sync playback state with engine
     useEffect(() => {
         const engine = replayEngineRef.current;
-        if (!engine) return;
+        console.log(`[TradingChart] isPlaying changed to: ${isPlaying}, engine exists: ${!!engine}`);
+
+        if (!engine) {
+            console.warn('[TradingChart] Cannot sync play state - engine not created yet');
+            return;
+        }
 
         if (isPlaying) {
+            console.log('[TradingChart] Calling engine.play()');
             engine.play();
         } else {
+            console.log('[TradingChart] Calling engine.pause()');
             engine.pause();
         }
     }, [isPlaying]);
@@ -314,17 +340,8 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
             }
 
 
-            // Debug: Check chart state after clear
-            try {
-                const panes = chart.getPanes();
-                console.log('Panes after clear:', panes?.map((p: any) => ({
-                    id: p.id,
-                    state: p.state,
-                    height: p.height
-                })));
-            } catch (e) {
-                console.warn('Could not get panes info:', e);
-            }
+            // Debug: indicators cleared successfully
+            console.log('✅ All indicators cleared from chart');
         } catch (e) {
             console.error('❌ Error clearing indicators:', e);
         }
@@ -451,18 +468,8 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
             }
         });
 
-        // Debug: Final check
-        try {
-            const finalPanes = chart.getPanes();
-            console.log('📊 Final panes structure:', finalPanes?.map((p: any) => ({
-                id: p.id,
-                state: p.state,
-                height: p.height,
-                indicators: p.indicators?.length || 0
-            })));
-        } catch (e) {
-            console.warn('Could not get final panes info:', e);
-        }
+        // Indicator application complete
+        console.log('📊 Indicator application complete');
 
         if (activeTypes.length > 0) {
             console.log('✅ Active indicators:', activeTypes);

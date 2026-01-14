@@ -1,29 +1,8 @@
 /**
  * Available Tickers for Trading
- * Organized by market (US / IDX)
+ * Indonesian (IDX) stocks only
  */
 import type { Ticker } from '@/types';
-
-export const US_TICKERS: Ticker[] = [
-    // Tech Giants
-    { symbol: 'AAPL', name: 'Apple Inc.', market: 'US', category: 'Technology' },
-    { symbol: 'GOOGL', name: 'Alphabet Inc.', market: 'US', category: 'Technology' },
-    { symbol: 'MSFT', name: 'Microsoft Corporation', market: 'US', category: 'Technology' },
-    { symbol: 'AMZN', name: 'Amazon.com Inc.', market: 'US', category: 'Technology' },
-    { symbol: 'META', name: 'Meta Platforms Inc.', market: 'US', category: 'Technology' },
-    { symbol: 'NVDA', name: 'NVIDIA Corporation', market: 'US', category: 'Technology' },
-    { symbol: 'TSLA', name: 'Tesla Inc.', market: 'US', category: 'Automotive' },
-
-    // Finance
-    { symbol: 'JPM', name: 'JPMorgan Chase & Co.', market: 'US', category: 'Finance' },
-    { symbol: 'BAC', name: 'Bank of America Corp.', market: 'US', category: 'Finance' },
-    { symbol: 'GS', name: 'Goldman Sachs Group Inc.', market: 'US', category: 'Finance' },
-
-    // Consumer
-    { symbol: 'WMT', name: 'Walmart Inc.', market: 'US', category: 'Retail' },
-    { symbol: 'DIS', name: 'Walt Disney Company', market: 'US', category: 'Entertainment' },
-    { symbol: 'NKE', name: 'Nike Inc.', market: 'US', category: 'Consumer' },
-];
 
 export const IDX_TICKERS: Ticker[] = [
     // Banking
@@ -45,24 +24,22 @@ export const IDX_TICKERS: Ticker[] = [
     { symbol: 'ADRO.JK', name: 'Adaro Energy Indonesia Tbk', market: 'IDX', category: 'Mining' },
 ];
 
-export const ALL_TICKERS: Ticker[] = [...US_TICKERS, ...IDX_TICKERS];
+export const ALL_TICKERS: Ticker[] = [...IDX_TICKERS];
 
 export const POPULAR_TICKERS: Ticker[] = [
-    US_TICKERS[0], // AAPL
-    US_TICKERS[1], // GOOGL
-    US_TICKERS[2], // MSFT
-    US_TICKERS[6], // TSLA
     IDX_TICKERS[0], // BBCA
     IDX_TICKERS[1], // BBRI
+    IDX_TICKERS[2], // BMRI
     IDX_TICKERS[4], // TLKM
+    IDX_TICKERS[6], // UNVR
 ];
 
 export function getTickerBySymbol(symbol: string): Ticker | undefined {
     return ALL_TICKERS.find((t) => t.symbol === symbol);
 }
 
-export function getTickersByMarket(market: 'US' | 'IDX'): Ticker[] {
-    return market === 'US' ? US_TICKERS : IDX_TICKERS;
+export function getTickersByMarket(market: 'IDX'): Ticker[] {
+    return IDX_TICKERS;
 }
 
 /**

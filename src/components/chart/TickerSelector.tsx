@@ -6,7 +6,7 @@
 
 import { useState, useMemo } from 'react';
 import { useChartStore } from '@/stores';
-import { US_TICKERS, IDX_TICKERS, POPULAR_TICKERS } from '@/lib/chart';
+import { IDX_TICKERS, ALL_TICKERS, POPULAR_TICKERS } from '@/lib/chart';
 import type { Ticker } from '@/types';
 
 interface TickerSelectorProps {
@@ -20,19 +20,10 @@ export function TickerSelector({ className = '' }: TickerSelectorProps) {
 
     // Get current ticker info
     const currentTicker = useMemo(() => {
-        return [...US_TICKERS, ...IDX_TICKERS].find((t) => t.symbol === ticker) || US_TICKERS[0];
+        return ALL_TICKERS.find((t) => t.symbol === ticker) || IDX_TICKERS[0];
     }, [ticker]);
 
-    // Filter tickers based on search
-    const filteredUS = useMemo(() => {
-        if (!searchQuery) return US_TICKERS;
-        const query = searchQuery.toLowerCase();
-        return US_TICKERS.filter(
-            (t) =>
-                t.symbol.toLowerCase().includes(query) || t.name.toLowerCase().includes(query)
-        );
-    }, [searchQuery]);
-
+    // Filter IDX tickers based on search
     const filteredIDX = useMemo(() => {
         if (!searchQuery) return IDX_TICKERS;
         const query = searchQuery.toLowerCase();
@@ -118,23 +109,6 @@ export function TickerSelector({ className = '' }: TickerSelectorProps) {
                                 </div>
                             )}
 
-                            {/* US Stocks */}
-                            {filteredUS.length > 0 && (
-                                <div className="p-2 border-t border-[var(--bg-tertiary)]">
-                                    <div className="text-xs font-medium text-[var(--text-tertiary)] px-2 py-1">
-                                        🇺🇸 US Stocks
-                                    </div>
-                                    {filteredUS.map((t) => (
-                                        <TickerItem
-                                            key={t.symbol}
-                                            ticker={t}
-                                            isActive={t.symbol === ticker}
-                                            onClick={() => handleSelect(t)}
-                                        />
-                                    ))}
-                                </div>
-                            )}
-
                             {/* IDX Stocks */}
                             {filteredIDX.length > 0 && (
                                 <div className="p-2 border-t border-[var(--bg-tertiary)]">
@@ -153,7 +127,7 @@ export function TickerSelector({ className = '' }: TickerSelectorProps) {
                             )}
 
                             {/* No Results */}
-                            {filteredUS.length === 0 && filteredIDX.length === 0 && (
+                            {filteredIDX.length === 0 && (
                                 <div className="p-4 text-center text-sm text-[var(--text-tertiary)]">
                                     No tickers found
                                 </div>
@@ -177,8 +151,8 @@ function TickerItem({ ticker, isActive, onClick }: TickerItemProps) {
         <button
             onClick={onClick}
             className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors ${isActive
-                    ? 'bg-[var(--accent-primary)] text-white'
-                    : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
+                ? 'bg-[var(--accent-primary)] text-white'
+                : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
                 }`}
         >
             <div className="flex items-center justify-between gap-2">
@@ -186,8 +160,8 @@ function TickerItem({ ticker, isActive, onClick }: TickerItemProps) {
                 {ticker.category && (
                     <span
                         className={`text-xs px-1.5 py-0.5 rounded ${isActive
-                                ? 'bg-white/20 text-white'
-                                : 'bg-[var(--bg-secondary)] text-[var(--text-tertiary)]'
+                            ? 'bg-white/20 text-white'
+                            : 'bg-[var(--bg-secondary)] text-[var(--text-tertiary)]'
                             }`}
                     >
                         {ticker.category}

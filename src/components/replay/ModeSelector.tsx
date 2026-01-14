@@ -5,10 +5,10 @@
 'use client';
 
 import { useChartStore } from '@/stores';
-import { MODE_LABELS, MODE_DESCRIPTIONS } from '@/lib/replay';
+import { REPLAY_MODE_LABELS, REPLAY_MODE_DESCRIPTIONS } from '@/lib/replay';
 import type { ReplayMode } from '@/types';
 
-const MODES: ReplayMode[] = ['live', 'h7', 'h30'];
+const MODES: ReplayMode[] = ['live', '1y'];
 
 export function ModeSelector() {
     const { replayMode, setReplayMode, loading } = useChartStore();
@@ -28,15 +28,15 @@ export function ModeSelector() {
                         onClick={() => handleModeChange(mode)}
                         disabled={loading}
                         className={`px-3 py-1.5 text-xs font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 ${replayMode === mode
-                                ? 'bg-[var(--accent-primary)] text-white'
-                                : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
+                            ? 'bg-[var(--accent-primary)] text-white'
+                            : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
                             }`}
-                        title={MODE_DESCRIPTIONS[mode]}
+                        title={REPLAY_MODE_DESCRIPTIONS[mode]}
                     >
                         {loading && replayMode === mode && (
                             <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
                         )}
-                        <span>{MODE_LABELS[mode]}</span>
+                        <span>{REPLAY_MODE_LABELS[mode]}</span>
                     </button>
                 ))}
             </div>

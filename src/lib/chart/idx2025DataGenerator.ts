@@ -21,7 +21,21 @@ const TICKER_PROFILES: Record<string, IDXTickerProfile> = {
         volumeProfile: 50_000_000,
         sector: 'Banking'
     },
+    'BBCA.JK': {
+        basePrice: 9000,
+        volatility: 0.02,
+        trend: 'bullish',
+        volumeProfile: 50_000_000,
+        sector: 'Banking'
+    },
     'BBRI': {
+        basePrice: 5200,
+        volatility: 0.025,
+        trend: 'neutral',
+        volumeProfile: 80_000_000,
+        sector: 'Banking'
+    },
+    'BBRI.JK': {
         basePrice: 5200,
         volatility: 0.025,
         trend: 'neutral',
@@ -35,6 +49,13 @@ const TICKER_PROFILES: Record<string, IDXTickerProfile> = {
         volumeProfile: 40_000_000,
         sector: 'Automotive'
     },
+    'ASII.JK': {
+        basePrice: 5400,
+        volatility: 0.018,
+        trend: 'bullish',
+        volumeProfile: 40_000_000,
+        sector: 'Automotive'
+    },
     'TLKM': {
         basePrice: 3200,
         volatility: 0.015,
@@ -42,7 +63,21 @@ const TICKER_PROFILES: Record<string, IDXTickerProfile> = {
         volumeProfile: 60_000_000,
         sector: 'Telecom'
     },
+    'TLKM.JK': {
+        basePrice: 3200,
+        volatility: 0.015,
+        trend: 'neutral',
+        volumeProfile: 60_000_000,
+        sector: 'Telecom'
+    },
     'UNVR': {
+        basePrice: 42000,
+        volatility: 0.012,
+        trend: 'neutral',
+        volumeProfile: 20_000_000,
+        sector: 'Consumer Goods'
+    },
+    'UNVR.JK': {
         basePrice: 42000,
         volatility: 0.012,
         trend: 'neutral',

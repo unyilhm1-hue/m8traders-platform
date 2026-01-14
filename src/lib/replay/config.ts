@@ -28,28 +28,25 @@ export const BASE_INTERVAL_MS = 1000;
 /**
  * Replay mode definitions
  */
-export const REPLAY_MODES: Record<string, ReplayMode> = {
+export const REPLAY_MODE = {
     LIVE: 'live',
-    H7: 'h7',
-    H30: 'h30',
+    ONE_YEAR: '1y', // 1 year historical data (daily candles)
 } as const;
 
 /**
  * Mode labels for UI display
  */
-export const MODE_LABELS: Record<ReplayMode, string> = {
-    live: 'Live',
-    h7: 'Last 7 Days',
-    h30: 'Last 30 Days',
+export const REPLAY_MODE_LABELS: Record<ReplayMode, string> = {
+    live: 'Live Trading',
+    '1y': '1 Year Replay',
 };
 
 /**
  * Mode descriptions for tooltips
  */
-export const MODE_DESCRIPTIONS: Record<ReplayMode, string> = {
-    live: 'Real-time simulation with current data',
-    h7: 'Replay last 7 days of historical data',
-    h30: 'Replay last 30 days of historical data',
+export const REPLAY_MODE_DESCRIPTIONS: Record<ReplayMode, string> = {
+    live: 'Real-time market data',
+    '1y': 'Replay 1 year of historical daily data for practice',
 };
 
 /**

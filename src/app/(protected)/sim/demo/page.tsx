@@ -20,7 +20,7 @@ export default function SimDemoPage() {
     const [activeTab, setActiveTab] = useState<'position' | 'pending' | 'trades'>('position');
     const { balance } = useTradingStore();
     const { checkAndFillOrders } = useTradingStore();
-    const { setRandomIDXTicker, setReplayMode } = useChartStore();
+    const { setRandomIDXTicker, setReplayMode, setPlaying } = useChartStore();
 
     // Enable keyboard shortcuts for replay
     useKeyboardShortcuts();
@@ -30,8 +30,11 @@ export default function SimDemoPage() {
         // Only run on client-side to avoid hydration mismatch
         if (typeof window !== 'undefined') {
             setRandomIDXTicker(); // Select random IDX ticker
-            setReplayMode('h30'); // Enable 30-day replay mode for auto-play
-            console.log('[SimDemo] Auto-play initialized with random IDX ticker');
+            setReplayMode('1y'); // Enable 1-year replay mode for practice
+
+            // ✅ FIX: Force playing to true immediately (no setTimeout)
+            setPlaying(true);
+            console.log('[SimDemo] Auto-play force-enabled with 1-year daily data');
         }
     }, []); // Empty dependency array = run once on mount
 

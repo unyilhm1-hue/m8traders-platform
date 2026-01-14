@@ -6,6 +6,7 @@
 
 import { useChartStore } from '@/stores';
 import { AverageCalculator } from './AverageCalculator';
+import type { Timeframe, ReplayMode } from '@/types';
 import { JumpToControls, TimelineSlider, MarketTimeSelector } from '@/components/replay';
 import { Select } from '@/components/ui/Select';
 import { UI_ICONS } from '@/lib/chart/icons';
@@ -165,71 +166,48 @@ export function CompactToolbar() {
                 {/* Average Calculator */}
                 <AverageCalculator />
 
-                {/* Separator */}
-                <div className="w-px h-6 bg-[var(--bg-tertiary)]" />
+                {/* Replay Controls - Always visible */}
+                <>
+                    {/* Play/Pause Button */}
+                    <button
+                        onClick={() => setPlaying(!isPlaying)}
+                        className={`
+                            w-8 h-8 flex items-center justify-center rounded-full transition-all
+                            ${isPlaying
+                                ? 'bg-[var(--accent-primary)] text-white glow-primary hover:bg-[var(--accent-primary)]/90'
+                                : 'bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
+                            }
+                        `}
+                        title={isPlaying ? 'Pause [Space]' : 'Play [Space]'}
+                    >
+                        {isPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+                    </button>
 
-                {/* Mode Selector */}
-                <div className="flex items-center gap-1 bg-[var(--bg-tertiary)] rounded-lg p-1 border border-[var(--bg-subtle-border)]">
-                    {['live', 'h7', 'h30'].map((mode) => (
-                        <button
-                            key={mode}
-                            onClick={() => setReplayMode(mode as any)}
-                            className={`px-3 py-1 text-xs rounded-md transition-all font-medium ${replayMode === mode
-                                ? 'bg-[var(--bg-secondary)] text-[var(--accent-primary)] shadow-sm'
-                                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]/50'
-                                }`}
-                        >
-                            {mode === 'live' ? 'LIVE' : mode === 'h7' ? '7D' : '30D'}
-                        </button>
-                    ))}
-                </div>
+                    {/* Speed Selector */}
+                    <Select
+                        value={String(playbackSpeed)}
+                        onChange={(val) => setPlaybackSpeed(Number(val) as any)}
+                        options={speedOptions}
+                        className="w-[80px]"
+                    />
 
-                {/* Enhanced Replay Controls */}
-                {replayMode !== 'live' && (
-                    <>
-                        {/* Play/Pause Button */}
-                        <button
-                            onClick={() => setPlaying(!isPlaying)}
-                            className={`
-                                w-8 h-8 flex items-center justify-center rounded-full transition-all
-                                ${isPlaying
-                                    ? 'bg-[var(--accent-primary)] text-white glow-primary hover:bg-[var(--accent-primary)]/90'
-                                    : 'bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
-                                }
-                            `}
-                            title={isPlaying ? 'Pause [Space]' : 'Play [Space]'}
-                        >
-                            {isPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
-                        </button>
+                    {/* Market Time Selector */}
+                    <MarketTimeSelector />
 
-                        {/* Speed Selector */}
-                        <Select
-                            value={String(playbackSpeed)}
-                            onChange={(val) => setPlaybackSpeed(Number(val) as any)}
-                            options={speedOptions}
-                            className="w-[80px]"
-                        />
+                    {/* Separator */}
+                    <div className="w-px h-6 bg-[var(--bg-tertiary)]" />
 
-                        {/* Market Time Selector */}
-                        <MarketTimeSelector />
-
-                        {/* Separator */}
-                        <div className="w-px h-6 bg-[var(--bg-tertiary)]" />
-
-                        {/* Jump To Controls */}
-                        <JumpToControls />
-                    </>
-                )}
+                    {/* Jump To Controls */}
+                    <JumpToControls />
+                </>
 
                 {/* Flexible Spacer */}
                 <div className="flex-1" />
 
-                {/* Timeline Slider (Compact) */}
-                {replayMode !== 'live' && (
-                    <div className="flex items-center gap-4 mr-4 w-[200px] xl:w-[300px]">
-                        <TimelineSlider />
-                    </div>
-                )}
+                {/* Timeline Slider */}
+                <div className="flex items-center gap-4 mr-4 w-[200px] xl:w-[300px]">
+                    <TimelineSlider />
+                </div>
             </div>
         </div>
     );

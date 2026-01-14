@@ -73,13 +73,13 @@ const DEFAULT_INDICATORS: Indicator[] = [
 ];
 
 const initialState = {
-    ticker: 'BBRI',  // ← CHANGED: Default to IDX ticker
-    timeframe: '5m' as Timeframe,
+    ticker: 'BBRI.JK',  // Default IDX ticker with .JK suffix
+    timeframe: '1d' as Timeframe,  // Daily for Yahoo Finance compatibility
     indicators: DEFAULT_INDICATORS,
     drawings: [] as Drawing[],
     theme: 'dark' as const,
-    isPlaying: true,  // ← CHANGED: Auto-play enabled
-    playbackSpeed: 2 as PlaybackSpeed,  // ← CHANGED: 2x speed
+    isPlaying: true,  // Auto-play enabled
+    playbackSpeed: 2 as PlaybackSpeed,  // 2x speed
     loading: false,
     error: null,
     lastUpdate: null,
@@ -87,7 +87,7 @@ const initialState = {
     overlays: [] as ChartOverlay[],
     drawingMode: false,
     // Replay state
-    replayMode: 'live' as ReplayMode,
+    replayMode: '1y' as ReplayMode,  // 1 year historical data
     replayIndex: 0,
     replayData: [] as Candle[],
     replayStartTime: null,

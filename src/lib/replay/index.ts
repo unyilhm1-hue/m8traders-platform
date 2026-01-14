@@ -7,9 +7,9 @@ export { ReplayEngine } from './ReplayEngine';
 export {
     PLAYBACK_SPEEDS,
     BASE_INTERVAL_MS,
-    REPLAY_MODES,
-    MODE_LABELS,
-    MODE_DESCRIPTIONS,
+    REPLAY_MODE,
+    REPLAY_MODE_LABELS,
+    REPLAY_MODE_DESCRIPTIONS,
     getIntervalForSpeed,
 } from './config';
 
