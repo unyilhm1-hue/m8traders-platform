@@ -5,19 +5,24 @@
 'use client';
 
 import { useState } from 'react';
+import { useChartStore } from '@/stores';
 import { Level2OrderBook, TimeAndSales, AdvancedMetricsDisplay } from '@/components/market';
 import { UI_ICONS } from '@/lib/chart/icons';
+import { formatPrice } from '@/lib/format';
 
 interface MarketDataPanelProps {
-    currentPrice: number;
+    currentPrice?: number; // Deprecated, using store now
 }
 
 type MarketDataTab = 'level2' | 'tape' | 'metrics';
 
-export function MarketDataPanel({ currentPrice }: MarketDataPanelProps) {
+export function MarketDataPanel({ currentPrice: deprecatedPrice }: MarketDataPanelProps) {
+    const { currentCandle, ticker } = useChartStore();
     const [activeTab, setActiveTab] = useState<MarketDataTab>('level2');
     const [isCollapsed, setIsCollapsed] = useState(false);
     const { Prev, Next } = UI_ICONS;
+
+    const displayPrice = currentCandle?.c ?? deprecatedPrice ?? 0;
 
     if (isCollapsed) {
         return (
@@ -42,7 +47,7 @@ export function MarketDataPanel({ currentPrice }: MarketDataPanelProps) {
                     <div className="flex items-center gap-2">
                         <span className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-wider">Last</span>
                         <span className="text-sm font-bold text-[var(--color-profit)] font-mono">
-                            ${currentPrice?.toFixed(2) ?? '144.25'}
+                            {formatPrice(displayPrice, ticker, { roundToTickSize: true })}
                         </span>
                     </div>
                 </div>
@@ -74,11 +79,11 @@ export function MarketDataPanel({ currentPrice }: MarketDataPanelProps) {
                 ))}
             </div>
 
-            {/* Tab Content */}
+            {/* Tab Content - No props needed, components use store */}
             <div className="flex-1 overflow-hidden relative">
-                {activeTab === 'level2' && <Level2OrderBook currentPrice={currentPrice} />}
-                {activeTab === 'tape' && <TimeAndSales currentPrice={currentPrice} />}
-                {activeTab === 'metrics' && <AdvancedMetricsDisplay currentPrice={currentPrice} />}
+                {activeTab === 'level2' && <Level2OrderBook />}
+                {activeTab === 'tape' && <TimeAndSales />}
+                {activeTab === 'metrics' && <AdvancedMetricsDisplay currentPrice={displayPrice} />}
             </div>
         </aside>
     );

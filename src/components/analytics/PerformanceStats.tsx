@@ -5,6 +5,7 @@
 'use client';
 
 import { useTradingStore } from '@/stores';
+import { formatIDR, formatPercent } from '@/lib/format';
 
 export function PerformanceStats() {
     const stats = useTradingStore((s) => s.stats);
@@ -34,7 +35,7 @@ export function PerformanceStats() {
                         className={`text-2xl font-bold font-mono ${totalPnL >= 0 ? 'text-green-400' : 'text-red-400'
                             }`}
                     >
-                        {totalPnL >= 0 ? '+' : ''}${totalPnL.toFixed(2)}
+                        {formatIDR(totalPnL)}
                     </p>
                 </div>
 
@@ -45,8 +46,7 @@ export function PerformanceStats() {
                         className={`text-2xl font-bold font-mono ${stats.totalReturn >= 0 ? 'text-green-400' : 'text-red-400'
                             }`}
                     >
-                        {stats.totalReturn >= 0 ? '+' : ''}
-                        {stats.totalReturn.toFixed(2)}%
+                        {formatPercent(stats.totalReturn / 100)}
                     </p>
                 </div>
 
@@ -87,19 +87,19 @@ export function PerformanceStats() {
                 <div className="grid grid-cols-2 gap-2 text-sm">
                     <div className="flex justify-between p-2 rounded bg-[var(--bg-tertiary)]">
                         <span className="text-[var(--text-tertiary)]">Avg Win:</span>
-                        <span className="font-mono text-green-400">${stats.avgWin.toFixed(2)}</span>
+                        <span className="font-mono text-green-400">{formatIDR(stats.avgWin)}</span>
                     </div>
                     <div className="flex justify-between p-2 rounded bg-[var(--bg-tertiary)]">
                         <span className="text-[var(--text-tertiary)]">Avg Loss:</span>
-                        <span className="font-mono text-red-400">${stats.avgLoss.toFixed(2)}</span>
+                        <span className="font-mono text-red-400">{formatIDR(Math.abs(stats.avgLoss))}</span>
                     </div>
                     <div className="flex justify-between p-2 rounded bg-[var(--bg-tertiary)]">
                         <span className="text-[var(--text-tertiary)]">Largest Win:</span>
-                        <span className="font-mono text-green-400">${largestWin.toFixed(2)}</span>
+                        <span className="font-mono text-green-400">{formatIDR(largestWin)}</span>
                     </div>
                     <div className="flex justify-between p-2 rounded bg-[var(--bg-tertiary)]">
                         <span className="text-[var(--text-tertiary)]">Largest Loss:</span>
-                        <span className="font-mono text-red-400">${Math.abs(largestLoss).toFixed(2)}</span>
+                        <span className="font-mono text-red-400">{formatIDR(Math.abs(largestLoss))}</span>
                     </div>
                     <div className="flex justify-between p-2 rounded bg-[var(--bg-tertiary)]">
                         <span className="text-[var(--text-tertiary)]">Best Streak:</span>

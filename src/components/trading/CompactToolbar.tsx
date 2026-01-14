@@ -133,7 +133,7 @@ export function CompactToolbar() {
                         <Portal>
                             <div
                                 id="indicators-dropdown"
-                                className="fixed z-[9999] bg-[var(--bg-secondary)] border border-[var(--bg-subtle-border)] rounded-lg shadow-xl py-2 min-w-[200px] animate-in fade-in zoom-in-95 duration-100"
+                                className="fixed z-[9999] bg-[var(--bg-secondary)] border border-[var(--bg-subtle-border)] rounded-lg shadow-xl py-2 min-w-[200px] max-h-[60vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-100"
                                 style={{
                                     top: indicatorPos.top - window.scrollY,
                                     left: indicatorPos.left - window.scrollX

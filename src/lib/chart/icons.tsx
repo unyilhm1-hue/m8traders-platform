@@ -34,7 +34,15 @@ import {
     Sun,
     Moon,
     Bell,
-    Flag
+    Flag,
+    Circle,
+    Spline,
+    Fan,
+    BoxSelect,
+    Square,
+    Triangle,
+    Frame,
+    Crown
 } from 'lucide-react';
 import type { ElementType } from 'react';
 
@@ -62,6 +70,26 @@ export const DRAWING_ICONS: Record<string, ElementType> = {
     // Advanced
     parallelStraightLine: Hash,
     fibonacciLine: GalleryVerticalEnd,
+    fibonacciCircle: Circle, // Proxy
+    fibonacciSegment: Minus,
+    fibonacciSpiral: Spline,
+    fibonacciSpeedResistanceFan: Fan, // Proxy
+    fibonacciExtension: GalleryVerticalEnd,
+    gannBox: BoxSelect,
+    gannSquare: Grid,
+    gannFan: Fan,
+
+    // Geometric Shapes
+    circle: Circle,
+    rect: Square,
+    triangle: Triangle,
+    parallelogram: Frame, // Proxy
+
+    // Waves & Patterns
+    threeWaves: Activity,
+    fiveWaves: Activity,
+    xabcd: Activity,
+    headAndShoulders: Crown, // Premium feel for H&S
 
     // Annotation
     simpleAnnotation: Type,

@@ -85,7 +85,21 @@ async function fetchFromAPI(
     timeframe: Timeframe
 ): Promise<StockDataResponse | null> {
     try {
-        const response = await fetch(`/api/stocks/${ticker}?timeframe=${timeframe}&limit=200`);
+        // Adjust limit based on timeframe to prevent chart crowding
+        // For 1m: need enough data to span 2 trading days for "day 2" start
+        const limits: Record<Timeframe, number> = {
+            '1m': 600,   // ~10 hours - ensures 2 trading days (IDX: 09:00-16:00 = 7h/day)
+            '5m': 200,   // ~16 hours - can span 2+ days
+            '15m': 150,  // ~1.5 days
+            '30m': 150,  // ~3 days
+            '1h': 200,   // ~1 week
+            '4h': 200,   // ~1 month
+            '1d': 200,   // ~200 days
+            '1w': 200,   // ~4 years
+        };
+
+        const limit = limits[timeframe] || 100;
+        const response = await fetch(`/api/stocks/${ticker}?timeframe=${timeframe}&limit=${limit}`);
 
         if (!response.ok) {
             console.warn(`API fetch failed: ${response.status}`);

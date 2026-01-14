@@ -8,13 +8,14 @@ import { useEffect, useState } from 'react';
 import { useChartStore } from '@/stores';
 import { generateAdvancedMetrics } from '@/lib/market';
 import type { AdvancedMetrics } from '@/types/market';
+import { formatPrice } from '@/lib/format';
 
 interface AdvancedMetricsProps {
     currentPrice: number;
 }
 
 export function AdvancedMetricsDisplay({ currentPrice }: AdvancedMetricsProps) {
-    const { replayData } = useChartStore();
+    const { replayData, currentCandle, ticker } = useChartStore();
     const [metrics, setMetrics] = useState<AdvancedMetrics | null>(null);
 
     useEffect(() => {
@@ -30,14 +31,7 @@ export function AdvancedMetricsDisplay({ currentPrice }: AdvancedMetricsProps) {
 
         const calculatedMetrics = generateAdvancedMetrics(candles);
         setMetrics(calculatedMetrics);
-
-        // Update every 5 seconds
-        const interval = setInterval(() => {
-            setMetrics(generateAdvancedMetrics(candles));
-        }, 5000);
-
-        return () => clearInterval(interval);
-    }, [replayData]);
+    }, [replayData, currentCandle]); // Recalculate when candle updates
 
     if (!metrics) {
         return (
@@ -63,7 +57,7 @@ export function AdvancedMetricsDisplay({ currentPrice }: AdvancedMetricsProps) {
                 <div className="flex items-baseline justify-between mb-1">
                     <span className="text-xs text-[var(--text-tertiary)]">ATR (14)</span>
                     <span className="text-sm font-mono font-semibold text-[var(--text-primary)]">
-                        ${metrics.atr.toFixed(2)}
+                        {formatPrice(metrics.atr, ticker, { roundToTickSize: true })}
                     </span>
                 </div>
                 <p className="text-[10px] text-[var(--text-tertiary)]">
@@ -90,14 +84,14 @@ export function AdvancedMetricsDisplay({ currentPrice }: AdvancedMetricsProps) {
                 <div className="flex items-baseline justify-between mb-1">
                     <span className="text-xs text-[var(--text-tertiary)]">VWAP</span>
                     <span className="text-sm font-mono font-semibold text-[var(--text-primary)]">
-                        ${metrics.vwap.toFixed(2)}
+                        {formatPrice(metrics.vwap, ticker, { roundToTickSize: true })}
                     </span>
                 </div>
                 <div className="flex items-center justify-between text-[10px]">
                     <span className="text-[var(--text-tertiary)]">Current vs VWAP:</span>
                     <span className={currentPrice > metrics.vwap ? 'text-green-400' : 'text-red-400'}>
-                        {currentPrice > metrics.vwap ? '↑' : '↓'} $
-                        {Math.abs(currentPrice - metrics.vwap).toFixed(2)}
+                        {currentPrice > metrics.vwap ? '↑' : '↓'}
+                        {formatPrice(Math.abs(currentPrice - metrics.vwap), ticker, { roundToTickSize: true })}
                     </span>
                 </div>
             </div>

@@ -30,6 +30,8 @@ interface ChartState {
     replayData: Candle[];
     replayStartTime: number | null;
     replayEndTime: number | null;
+    // Current candle (for market data sync)
+    currentCandle: Candle | null;
 
     // Actions
     setTicker: (ticker: string) => void;
@@ -59,22 +61,48 @@ interface ChartState {
     resetReplay: () => void;
     reset: () => void;
     setRandomIDXTicker: () => void;  // NEW: For auto-select on login
+    // Current candle actions
+    setCurrentCandle: (candle: Candle) => void;
 }
 
 const DEFAULT_INDICATORS: Indicator[] = [
+    // Moving Averages
     { id: 'sma-20', type: 'sma', period: 20, enabled: false, color: '#2196F3' },
     { id: 'sma-50', type: 'sma', period: 50, enabled: false, color: '#FF9800' },
     { id: 'ema-12', type: 'ema', period: 12, enabled: false, color: '#4CAF50' },
-    { id: 'rsi-14', type: 'rsi', period: 14, enabled: false, color: '#9C27B0' },
+    { id: 'wma-20', type: 'wma', period: 20, enabled: false, color: '#9C27B0' },
+
+    // Oscillators & Trend
+    { id: 'rsi-14', type: 'rsi', period: 14, enabled: false, color: '#E91E63' },
     { id: 'macd', type: 'macd', enabled: false, color: '#00BCD4' },
-    { id: 'bollinger-20', type: 'bollinger', period: 20, enabled: false, color: '#E91E63' },
-    // Note: VWAP removed - not a built-in KLineChart indicator
-    // Will be implemented as custom indicator in future
+    { id: 'kdj-14', type: 'kdj', period: 14, enabled: false, color: '#673AB7' },
+    { id: 'cci-20', type: 'cci', period: 20, enabled: false, color: '#FFC107' },
+    { id: 'wr-14', type: 'wr', period: 14, enabled: false, color: '#795548' },
+    { id: 'ao', type: 'ao', enabled: false, color: '#8BC34A' },
+    { id: 'bias-24', type: 'bias', period: 24, enabled: false, color: '#009688' },
+    { id: 'brar-26', type: 'brar', period: 26, enabled: false, color: '#3F51B5' },
+    { id: 'mtm-12', type: 'mtm', period: 12, enabled: false, color: '#CDDC39' },
+    { id: 'roc-12', type: 'roc', period: 12, enabled: false, color: '#FF5722' },
+    { id: 'psy-12', type: 'psy', period: 12, enabled: false, color: '#607D8B' },
+    { id: 'trix-12', type: 'trix', period: 12, enabled: false, color: '#9E9E9E' },
+
+    // Volatility
+    { id: 'bollinger-20', type: 'bollinger', period: 20, enabled: false, color: '#F44336' },
+    { id: 'atr-14', type: 'atr', period: 14, enabled: false, color: '#9C27B0' },
+    { id: 'dma-10', type: 'dma', period: 10, enabled: false, color: '#3F51B5' },
+
+    // Trend
+    { id: 'adx-14', type: 'adx', period: 14, enabled: false, color: '#2196F3' },
+    { id: 'sar', type: 'sar', enabled: false, color: '#00BCD4' },
+
+    // Volume
+    { id: 'obv', type: 'obv', enabled: false, color: '#FF9800' },
+    { id: 'vr-26', type: 'vr', period: 26, enabled: false, color: '#4CAF50' },
 ];
 
 const initialState = {
     ticker: 'BBRI.JK',  // Default IDX ticker with .JK suffix
-    timeframe: '1d' as Timeframe,  // Daily for Yahoo Finance compatibility
+    timeframe: '1m' as Timeframe,  // 1-minute for intraday replay
     indicators: DEFAULT_INDICATORS,
     drawings: [] as Drawing[],
     theme: 'dark' as const,
@@ -92,7 +120,40 @@ const initialState = {
     replayData: [] as Candle[],
     replayStartTime: null,
     replayEndTime: null,
+    currentCandle: null,
 };
+
+/**
+ * Helper: Find index of first candle on second day
+ * For intraday data with single day, starts from 20% to show context
+ */
+function findSecondDayIndex(candles: Candle[]): number {
+    if (candles.length === 0) return 0;
+
+    // Get first candle's date (YYYY-MM-DD)
+    const firstDate = new Date(candles[0].t).toISOString().split('T')[0];
+
+    // Find first candle with different date
+    for (let i = 1; i < candles.length; i++) {
+        const currentDate = new Date(candles[i].t).toISOString().split('T')[0];
+        if (currentDate !== firstDate) {
+            console.log(`[ChartStore] Starting replay from day 2 (index ${i}, date ${currentDate})`);
+            return i;
+        }
+    }
+
+    // No second day found
+    // For single-day intraday data, start from 20% to show context
+    const contextStartIndex = Math.floor(candles.length * 0.2);
+    if (contextStartIndex > 0) {
+        const startDate = new Date(candles[contextStartIndex].t).toISOString();
+        console.log(`[ChartStore] Single day intraday data, starting from 20% (index ${contextStartIndex}, time ${startDate})`);
+        return contextStartIndex;
+    }
+
+    console.log(`[ChartStore] Starting from index 0`);
+    return 0;
+}
 
 export const useChartStore = create<ChartState>()(
     persist(
@@ -203,9 +264,7 @@ export const useChartStore = create<ChartState>()(
             setReplayMode: (mode) =>
                 set((state) => {
                     state.replayMode = mode;
-                    // Reset replay position when changing modes
-                    state.replayIndex = 0;
-                    state.isPlaying = false;
+                    // Don't reset position/playing state when just changing mode
                 }),
 
             setReplayIndex: (index) =>
@@ -218,7 +277,10 @@ export const useChartStore = create<ChartState>()(
             setReplayData: (data) =>
                 set((state) => {
                     state.replayData = data;
-                    state.replayIndex = 0;
+                    // Start from second day to show historical context
+                    state.replayIndex = findSecondDayIndex(data);
+                    // Auto-set timeframe to 1m for replay
+                    state.timeframe = '1m';
                     if (data.length > 0) {
                         state.replayStartTime = data[0].t;
                         state.replayEndTime = data[data.length - 1].t;
@@ -246,21 +308,24 @@ export const useChartStore = create<ChartState>()(
                     console.log(`[ChartStore] Random IDX ticker selected: ${randomTicker.symbol}`);
                 }),
 
+            // Current candle setter
+            setCurrentCandle: (candle) =>
+                set((state) => {
+                    state.currentCandle = candle;
+                }),
+
             reset: () => set(initialState),
         })),
         {
             name: 'm8traders-chart',
-            version: 1, // Bumped version for migration
+            version: 2, // Bumped for new indicators
             migrate: (persistedState: any, version: number) => {
-                // Migrate from version 0 (old format) to version 1 (with IDs)
+                // Initial migration (v0 -> v1)
                 if (version === 0 || !version) {
-                    console.log('[useChartStore] Migrating from old format...');
-
                     if (persistedState?.indicators) {
                         persistedState.indicators = persistedState.indicators
-                            .filter((ind: any) => ind.type !== 'vwap') // Remove old vwap
+                            .filter((ind: any) => ind.type !== 'vwap')
                             .map((ind: any) => {
-                                // If indicator missing 'id', generate it
                                 if (!ind.id) {
                                     const id = ind.period
                                         ? `${ind.type}-${ind.period}`
@@ -269,9 +334,20 @@ export const useChartStore = create<ChartState>()(
                                 }
                                 return ind;
                             });
-                        console.log('[useChartStore] Migration complete:', persistedState.indicators.length, 'indicators');
                     }
                 }
+
+                // Migration v1 -> v2 (Add new KLineChart indicators)
+                if (version < 2) {
+                    const existingIndicators = persistedState.indicators || [];
+                    const existingIds = new Set(existingIndicators.map((i: any) => i.id));
+
+                    const newIndicators = DEFAULT_INDICATORS.filter(i => !existingIds.has(i.id));
+
+                    persistedState.indicators = [...existingIndicators, ...newIndicators];
+                    console.log(`[useChartStore] Migrated to v2: Added ${newIndicators.length} new indicators`);
+                }
+
                 return persistedState;
             },
             partialize: (state) => ({

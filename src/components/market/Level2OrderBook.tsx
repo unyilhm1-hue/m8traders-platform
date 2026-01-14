@@ -5,29 +5,48 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { generateOrderBook } from '@/lib/market';
-import type { OrderBook } from '@/types/market';
+import { useChartStore } from '@/stores';
+import { generateOrderbook, type OrderbookSnapshot } from '@/lib/market/orderbookGenerator';
+import { calculateATR } from '@/lib/market/calculateATR';
+import { formatPrice, formatPercent } from '@/lib/format';
 
 interface Level2OrderBookProps {
-    currentPrice: number;
+    currentPrice?: number; // Optional, will use store if not provided
 }
 
-export function Level2OrderBook({ currentPrice }: Level2OrderBookProps) {
-    const [orderBook, setOrderBook] = useState<OrderBook | null>(null);
+export function Level2OrderBook({ currentPrice: priceOverride }: Level2OrderBookProps) {
+    const { currentCandle, replayData, ticker } = useChartStore();
+    const [orderBook, setOrderBook] = useState<OrderbookSnapshot | null>(null);
 
     useEffect(() => {
-        // Generate initial order book
-        setOrderBook(generateOrderBook(currentPrice));
+        if (!currentCandle || replayData.length === 0) {
+            setOrderBook(null);
+            return;
+        }
 
-        // Update every 2 seconds
-        const interval = setInterval(() => {
-            setOrderBook(generateOrderBook(currentPrice));
-        }, 2000);
+        // Calculate ATR from last 14 candles (or available candles)
+        const atr = calculateATR(replayData.slice(-14), 14);
 
-        return () => clearInterval(interval);
-    }, [currentPrice]);
+        // Generate orderbook from current candle
+        const snapshot = generateOrderbook(currentCandle, {
+            atr,
+            numLevels: 10,
+            baseSpreadTicks: 2.5,
+        });
 
-    if (!orderBook) return null;
+        setOrderBook(snapshot);
+    }, [currentCandle, replayData]);
+
+    if (!orderBook) {
+        return (
+            <div className="h-full flex flex-col bg-[var(--bg-secondary)]">
+                <div className="p-3 border-b border-[var(--bg-tertiary)]">
+                    <h3 className="text-sm font-semibold text-[var(--text-primary)]">Level 2</h3>
+                    <p className="text-xs text-[var(--text-tertiary)] mt-1">Waiting for data...</p>
+                </div>
+            </div>
+        );
+    }
 
     const maxBidQty = Math.max(...orderBook.bids.map((b) => b.quantity));
     const maxAskQty = Math.max(...orderBook.asks.map((a) => a.quantity));
@@ -41,10 +60,10 @@ export function Level2OrderBook({ currentPrice }: Level2OrderBookProps) {
                 <div className="mt-1 flex items-baseline gap-2 text-xs">
                     <span className="text-[var(--text-tertiary)]">Spread:</span>
                     <span className="text-[var(--text-primary)] font-mono">
-                        ${orderBook.spread.toFixed(2)}
+                        {formatPrice(orderBook.spread, ticker, { roundToTickSize: true })}
                     </span>
                     <span className="text-[var(--text-tertiary)]">
-                        ({orderBook.spreadPercent.toFixed(3)}%)
+                        ({formatPercent(orderBook.spreadPercent / 100, 3)})
                     </span>
                 </div>
             </div>
@@ -69,7 +88,7 @@ export function Level2OrderBook({ currentPrice }: Level2OrderBookProps) {
                                     className="absolute right-0 top-0 bottom-0 bg-red-500/10"
                                     style={{ width: `${percent}%` }}
                                 />
-                                <div className="relative text-right text-red-400">${ask.price.toFixed(2)}</div>
+                                <div className="relative text-right text-red-400">{formatPrice(ask.price, ticker, { roundToTickSize: true })}</div>
                                 <div className="relative text-right text-[var(--text-primary)]">
                                     {ask.quantity.toLocaleString()}
                                 </div>
@@ -84,10 +103,10 @@ export function Level2OrderBook({ currentPrice }: Level2OrderBookProps) {
                 {/* Spread Indicator */}
                 <div className="py-2 px-3 bg-[var(--bg-tertiary)] flex items-center justify-between">
                     <span className="text-xs font-semibold text-[var(--text-primary)]">
-                        Spread: ${orderBook.spread.toFixed(2)}
+                        Spread: {formatPrice(orderBook.spread, ticker, { roundToTickSize: true })}
                     </span>
                     <span className="text-xs text-[var(--text-tertiary)]">
-                        Mid: ${orderBook.midPrice.toFixed(2)}
+                        Mid: {formatPrice(orderBook.midPrice, ticker, { roundToTickSize: true })}
                     </span>
                 </div>
 
@@ -104,7 +123,7 @@ export function Level2OrderBook({ currentPrice }: Level2OrderBookProps) {
                                     className="absolute right-0 top-0 bottom-0 bg-green-500/10"
                                     style={{ width: `${percent}%` }}
                                 />
-                                <div className="relative text-right text-green-400">${bid.price.toFixed(2)}</div>
+                                <div className="relative text-right text-green-400">{formatPrice(bid.price, ticker, { roundToTickSize: true })}</div>
                                 <div className="relative text-right text-[var(--text-primary)]">
                                     {bid.quantity.toLocaleString()}
                                 </div>

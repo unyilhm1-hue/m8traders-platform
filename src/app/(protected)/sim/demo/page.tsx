@@ -14,13 +14,14 @@ import { MarketDataPanel } from '@/components/market/MarketDataPanel';
 import { PerformanceStats, TradeHistory } from '@/components/analytics';
 import { useChartStore, useTradingStore } from '@/stores';
 import { useKeyboardShortcuts } from '@/hooks';
+import { formatPrice, formatIDR } from '@/lib/format';
 
 export default function SimDemoPage() {
     const [currentPrice, setCurrentPrice] = useState(185.5);
     const [activeTab, setActiveTab] = useState<'position' | 'pending' | 'trades'>('position');
     const { balance } = useTradingStore();
     const { checkAndFillOrders } = useTradingStore();
-    const { setRandomIDXTicker, setReplayMode, setPlaying } = useChartStore();
+    const { setRandomIDXTicker, setReplayMode, setPlaying, ticker } = useChartStore();
 
     // Enable keyboard shortcuts for replay
     useKeyboardShortcuts();
@@ -69,7 +70,7 @@ export default function SimDemoPage() {
                             <div>
                                 <div className="text-xs text-[var(--text-tertiary)]">Balance</div>
                                 <div className="text-lg font-bold text-[var(--text-primary)]">
-                                    ${balance.toLocaleString()}
+                                    {formatIDR(balance)}
                                 </div>
                             </div>
                             <div className="text-right">
@@ -82,7 +83,7 @@ export default function SimDemoPage() {
                         <div className="pt-3 border-t border-[var(--bg-tertiary)]">
                             <div className="text-xs text-[var(--text-tertiary)] mb-1">Current Price</div>
                             <div className="text-2xl font-bold text-[var(--text-primary)]">
-                                ${currentPrice.toFixed(2)}
+                                {formatPrice(currentPrice, ticker, { roundToTickSize: true })}
                             </div>
                         </div>
                     </div>

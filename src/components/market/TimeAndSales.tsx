@@ -4,43 +4,75 @@
  */
 'use client';
 
-import { useEffect, useState } from 'react';
-import { generateTimeAndSalesEntry } from '@/lib/market';
-import type { TimeAndSalesEntry } from '@/types/market';
+import { useEffect, useState, useRef } from 'react';
+import { useChartStore } from '@/stores';
+import type { Candle } from '@/types';
+import { formatPrice } from '@/lib/format';
 
 interface TimeAndSalesProps {
-    currentPrice: number;
+    currentPrice?: number; // Optional, will use store if not provided
 }
 
-export function TimeAndSales({ currentPrice }: TimeAndSalesProps) {
+interface TimeAndSalesEntry {
+    id: string;
+    timestamp: number;
+    price: number;
+    size: number;
+    side: 'buy' | 'sell' | 'neutral';
+    condition?: 'block' | 'normal';
+}
+
+export function TimeAndSales({ currentPrice: priceOverride }: TimeAndSalesProps) {
+    const { currentCandle, ticker } = useChartStore();
     const [entries, setEntries] = useState<TimeAndSalesEntry[]>([]);
+    const previousCandleRef = useRef<Candle | null>(null);
 
     useEffect(() => {
-        // Generate initial entries
-        const initial: TimeAndSalesEntry[] = [];
-        let prevPrice = currentPrice;
+        if (!currentCandle) return;
 
-        for (let i = 0; i < 20; i++) {
-            const entry = generateTimeAndSalesEntry(prevPrice, i > 0 ? prevPrice : undefined);
-            initial.unshift(entry);
-            prevPrice = entry.price;
+        const previousCandle = previousCandleRef.current;
+
+        // Determine side based on price movement
+        let side: 'buy' | 'sell' | 'neutral' = 'neutral';
+        if (previousCandle) {
+            if (currentCandle.c > previousCandle.c) {
+                side = 'buy';
+            } else if (currentCandle.c < previousCandle.c) {
+                side = 'sell';
+            }
         }
 
-        setEntries(initial);
+        // Calculate size from volume delta
+        const volumeDelta = previousCandle
+            ? Math.abs(currentCandle.v - previousCandle.v)
+            : currentCandle.v;
 
-        // Add new entry every 1-3 seconds
-        const interval = setInterval(() => {
-            setEntries((prev) => {
-                const lastPrice = prev[0]?.price || currentPrice;
-                const newEntry = generateTimeAndSalesEntry(currentPrice, lastPrice);
+        // Determine if this is a block trade (unusually large volume)
+        const avgVolume = currentCandle.v / 20; // Assume 20 ticks per candle
+        const isBlockTrade = volumeDelta > avgVolume * 5;
 
-                // Keep only last 50 entries
-                return [newEntry, ...prev.slice(0, 49)];
-            });
-        }, Math.random() * 2000 + 1000);
+        // Create new entry
+        const newEntry: TimeAndSalesEntry = {
+            id: `${currentCandle.t}-${currentCandle.c}`,
+            timestamp: currentCandle.t,
+            price: currentCandle.c,
+            size: Math.round(volumeDelta),
+            side,
+            condition: isBlockTrade ? 'block' : 'normal',
+        };
 
-        return () => clearInterval(interval);
-    }, [currentPrice]);
+        // Add new entry and keep only last 50
+        setEntries((prev) => {
+            // Avoid duplicates (same timestamp and price)
+            if (prev.length > 0 && prev[0].id === newEntry.id) {
+                return prev;
+            }
+            return [newEntry, ...prev.slice(0, 49)];
+        });
+
+        // Update reference
+        previousCandleRef.current = currentCandle;
+    }, [currentCandle]);
 
     const formatTime = (timestamp: number) => {
         const date = new Date(timestamp);
@@ -51,6 +83,17 @@ export function TimeAndSales({ currentPrice }: TimeAndSalesProps) {
             hour12: false,
         });
     };
+
+    if (entries.length === 0) {
+        return (
+            <div className="h-full flex flex-col bg-[var(--bg-secondary)]">
+                <div className="p-3 border-b border-[var(--bg-tertiary)]">
+                    <h3 className="text-sm font-semibold text-[var(--text-primary)]">Time & Sales</h3>
+                    <p className="text-xs text-[var(--text-tertiary)] mt-0.5">Waiting for trades...</p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="h-full flex flex-col bg-[var(--bg-secondary)]">
@@ -90,7 +133,7 @@ export function TimeAndSales({ currentPrice }: TimeAndSalesProps) {
                                 {formatTime(entry.timestamp)}
                             </div>
                             <div className={`text-right ${sideColor} font-semibold`}>
-                                ${entry.price.toFixed(2)}
+                                {formatPrice(entry.price, ticker, { roundToTickSize: true })}
                             </div>
                             <div className="text-right text-[var(--text-primary)]">
                                 {entry.size.toLocaleString()}

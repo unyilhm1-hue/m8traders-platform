@@ -50,15 +50,24 @@ export type IndicatorType =
     | 'kdj' // Stochastic
     | 'cci'
     | 'wr' // Williams %R
+    | 'ao' // Awesome Oscillator
+    | 'bias'
+    | 'brar'
+    | 'mtm' // Momentum
+    | 'roc' // Rate of Change
+    | 'psy' // Psychological Line
     // Volatility
     | 'bollinger'
     | 'atr'
+    | 'dma'
     // Trend
     | 'adx'
     | 'sar'
+    | 'trix'
     // Volume
     // Note: vwap removed - will be implemented as custom indicator
-    | 'obv';
+    | 'obv'
+    | 'vr'; // Volume Ratio
 
 export interface Drawing {
     id: string;
@@ -105,6 +114,25 @@ export type OverlayType =
     // Advanced Tools
     | 'parallelStraightLine'
     | 'fibonacciLine'
+    | 'fibonacciCircle'
+    | 'fibonacciSegment'
+    | 'fibonacciSpiral'
+    | 'fibonacciSpeedResistanceFan'
+    | 'fibonacciExtension'
+    | 'gannBox'
+    | 'gannSquare'
+    | 'gannFan'
+    // Geometric Shapes
+    | 'circle'
+    | 'rect'
+    | 'triangle'
+    | 'parallelogram'
+    // Waves & Patterns
+    | 'threeWaves'
+    | 'fiveWaves'
+    | 'xabcd'
+    | 'headAndShoulders'
+    // Annotations
     | 'simpleAnnotation'
     | 'simpleTag';
 

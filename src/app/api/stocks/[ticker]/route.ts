@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import yahooFinance from 'yahoo-finance2';
+import YahooFinance from 'yahoo-finance2'; // v3: default export is the class
 import type { Candle } from '@/types';
+
+// v3 requires instantiation (per UPGRADING.md)
+const yahooFinance = new YahooFinance();
 
 /**
  * Yahoo Finance supported intervals
@@ -49,16 +52,31 @@ export async function GET(request: NextRequest, context: RouteParams) {
 
             console.log(`[API] Batch download: ${yahooTicker} ${interval} from ${period1.toISOString()} to ${period2.toISOString()}`);
         } else {
-            // Default: 1 year of daily data for stability
+            // Default: Use requested interval
+            yahooInterval = mapTimeframeToInterval(interval);
+
             const now = new Date();
-            const oneYearAgo = new Date(now);
-            oneYearAgo.setFullYear(now.getFullYear() - 1);
 
-            period1 = oneYearAgo;
+            // Adjust period based on timeframe
+            // Intraday data: Yahoo limits to 7 days for 1m-30m, 60 days for 1h
+            // Daily+ data: Use 1 year
+            if (['1m', '5m', '15m', '30m'].includes(interval)) {
+                // 7 days for minute-level data
+                period1 = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                console.log(`[API] Default fetch: ${yahooTicker} ${yahooInterval} (7 days)`);
+            } else if (interval === '1h') {
+                // 60 days for hourly
+                period1 = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+                console.log(`[API] Default fetch: ${yahooTicker} ${yahooInterval} (60 days)`);
+            } else {
+                // 1 year for daily+
+                const oneYearAgo = new Date(now);
+                oneYearAgo.setFullYear(now.getFullYear() - 1);
+                period1 = oneYearAgo;
+                console.log(`[API] Default fetch: ${yahooTicker} ${yahooInterval} (1 year)`);
+            }
+
             period2 = now;
-            yahooInterval = '1d'; // Always daily for default
-
-            console.log(`[API] Default fetch: ${yahooTicker} 1d (1 year)`);
         }
 
         // Fetch from Yahoo Finance
@@ -66,7 +84,7 @@ export async function GET(request: NextRequest, context: RouteParams) {
             period1,
             period2,
             interval: yahooInterval,
-        });
+        }, { validateResult: false }); // Disable strict validation
 
         if (!result.quotes || result.quotes.length === 0) {
             console.warn(`[API] No data returned for ${yahooTicker}`);

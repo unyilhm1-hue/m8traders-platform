@@ -75,6 +75,47 @@ export const INDICATOR_CONFIG: Record<IndicatorType, {
         defaultPeriod: 14,
         pane: 'sub',
     },
+    ao: {
+        name: 'AO',
+        description: 'Awesome Oscillator',
+        pane: 'sub',
+    },
+    bias: {
+        name: 'BIAS',
+        description: 'Bias Ratio',
+        defaultPeriod: 24,
+        pane: 'sub',
+    },
+    brar: {
+        name: 'BRAR',
+        description: 'Sentiment Indicator',
+        defaultPeriod: 26,
+        pane: 'sub',
+    },
+    mtm: {
+        name: 'MTM',
+        description: 'Momentum',
+        defaultPeriod: 12,
+        pane: 'sub',
+    },
+    roc: {
+        name: 'ROC',
+        description: 'Rate of Change',
+        defaultPeriod: 12,
+        pane: 'sub',
+    },
+    psy: {
+        name: 'PSY',
+        description: 'Psychological Line',
+        defaultPeriod: 12,
+        pane: 'sub',
+    },
+    trix: {
+        name: 'TRIX',
+        description: 'Triple Exponential Average',
+        defaultPeriod: 12,
+        pane: 'sub',
+    },
     // Volatility
     bollinger: {
         name: 'BOLL',
@@ -86,6 +127,12 @@ export const INDICATOR_CONFIG: Record<IndicatorType, {
         name: 'ATR',
         description: 'Average True Range',
         defaultPeriod: 14,
+        pane: 'sub',
+    },
+    dma: {
+        name: 'DMA',
+        description: 'Different of Moving Average',
+        defaultPeriod: 10,
         pane: 'sub',
     },
     // Trend
@@ -106,6 +153,12 @@ export const INDICATOR_CONFIG: Record<IndicatorType, {
     obv: {
         name: 'OBV',
         description: 'On-Balance Volume',
+        pane: 'sub',
+    },
+    vr: {
+        name: 'VR',
+        description: 'Volume Ratio',
+        defaultPeriod: 26,
         pane: 'sub',
     },
 };
@@ -217,11 +270,127 @@ export const DRAWING_TOOLS: Record<
         totalStep: 3,
     },
     fibonacciLine: {
-        name: 'Fibonacci',
+        name: 'Fib Retracement',
         icon: '🔢',
         description: 'Fibonacci retracement levels',
         category: 'advanced',
         totalStep: 2,
+    },
+    fibonacciCircle: {
+        name: 'Fib Circle',
+        icon: '⭕',
+        description: 'Fibonacci Circles',
+        category: 'advanced',
+        totalStep: 2,
+    },
+    fibonacciSegment: {
+        name: 'Fib Segment',
+        icon: 'F',
+        description: 'Fibonacci Segment',
+        category: 'advanced',
+        totalStep: 2,
+    },
+    fibonacciSpiral: {
+        name: 'Fib Spiral',
+        icon: '꩜',
+        description: 'Fibonacci Spiral',
+        category: 'advanced',
+        totalStep: 2,
+    },
+    fibonacciSpeedResistanceFan: {
+        name: 'Fib Fan',
+        icon: 'F',
+        description: 'Fibonacci Speed Resistance Fan',
+        category: 'advanced',
+        totalStep: 2,
+    },
+    fibonacciExtension: {
+        name: 'Fib Extension',
+        icon: 'F',
+        description: 'Fibonacci Extension',
+        category: 'advanced',
+        totalStep: 3,
+    },
+    gannBox: {
+        name: 'Gann Box',
+        icon: 'G',
+        description: 'Gann Box',
+        category: 'advanced',
+        totalStep: 2,
+    },
+    gannSquare: {
+        name: 'Gann Square',
+        icon: 'G',
+        description: 'Gann Square',
+        category: 'advanced',
+        totalStep: 2,
+    },
+    gannFan: {
+        name: 'Gann Fan',
+        icon: 'G',
+        description: 'Gann Fan',
+        category: 'advanced',
+        totalStep: 2,
+    },
+
+    // Geometric Shapes
+    circle: {
+        name: 'Circle',
+        icon: '⚪',
+        description: 'Circle shape',
+        category: 'annotation',
+        totalStep: 2,
+    },
+    rect: {
+        name: 'Rectangle',
+        icon: '⬜',
+        description: 'Rectangle shape',
+        category: 'annotation',
+        totalStep: 2,
+    },
+    triangle: {
+        name: 'Triangle',
+        icon: '🔺',
+        description: 'Triangle shape',
+        category: 'annotation',
+        totalStep: 3,
+    },
+    parallelogram: {
+        name: 'Parallelogram',
+        icon: '▱',
+        description: 'Parallelogram shape',
+        category: 'annotation',
+        totalStep: 3,
+    },
+
+    // Waves & Patterns
+    threeWaves: {
+        name: 'Elliott 3',
+        icon: '3',
+        description: 'Elliott Wave (3 points)',
+        category: 'advanced',
+        totalStep: 3,
+    },
+    fiveWaves: {
+        name: 'Elliott 5',
+        icon: '5',
+        description: 'Elliott Wave (5 points)',
+        category: 'advanced',
+        totalStep: 5,
+    },
+    xabcd: {
+        name: 'XABCD',
+        icon: 'X',
+        description: 'XABCD Pattern',
+        category: 'advanced',
+        totalStep: 5,
+    },
+    headAndShoulders: {
+        name: 'Head & Shoulders',
+        icon: 'H',
+        description: 'Head and Shoulders Pattern',
+        category: 'advanced',
+        totalStep: 5, // Check steps
     },
 
     // Annotations

@@ -5,6 +5,7 @@
 'use client';
 
 import { useTradingStore } from '@/stores';
+import { formatIDR } from '@/lib/format';
 
 export function TradeHistory() {
     const trades = useTradingStore((s) => s.trades);
@@ -72,12 +73,12 @@ export function TradeHistory() {
                                 {trade.shares}
                             </div>
                             <div className="col-span-1 text-right text-[var(--text-primary)]">
-                                ${trade.price.toFixed(2)}
+                                {formatIDR(trade.price, { roundToTickSize: true })}
                             </div>
                             <div className={`col-span-1 text-right font-medium ${pnlColor}`}>
                                 {hasPnL ? (
                                     <>
-                                        {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+                                        {formatIDR(pnl)}
                                     </>
                                 ) : (
                                     <span className="text-[var(--text-tertiary)] opacity-30">—</span>

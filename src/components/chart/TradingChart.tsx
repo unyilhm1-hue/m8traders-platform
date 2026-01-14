@@ -13,6 +13,7 @@ import {
     fetchStockData,
     type KLineData,
 } from '@/lib/chart';
+import { INDICATOR_CONFIG } from '@/lib/chart/config';
 import { ReplayEngine } from '@/lib/replay';
 import type { Candle } from '@/types';
 
@@ -46,6 +47,7 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
         setActiveDrawingTool,
         setReplayData,
         setReplayIndex,
+        setCurrentCandle,
     } = useChartStore();
 
     const [chartData, setChartData] = useState<KLineData[]>([]);
@@ -182,6 +184,9 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
 
                 if (partialCandle && chart) {
                     try {
+                        // Update store with current partial candle
+                        setCurrentCandle(partialCandle);
+
                         // Convert to KLineData format
                         const klinePartial = toKLineData([partialCandle])[0];
 
@@ -217,6 +222,11 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
                     console.log(`[TradingChart] Candle completed, total: ${visibleData.length}`);
                 }
 
+                // Update store with completed candle
+                if (visibleData.length > 0) {
+                    setCurrentCandle(visibleData[visibleData.length - 1]);
+                }
+
                 // Keep state in sync for other components
                 setChartData(klineData);
             },
@@ -230,11 +240,18 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
 
         replayEngineRef.current = engine;
 
-        // Show initial candles
-        const initialData = toKLineData(engine.getVisibleData());
+        // Show initial candles (limit to last 150 to prevent barcode effect)
+        // This ensures chart starts zoomed-in on Day 2 with readable candles
+        const visibleData = engine.getVisibleData();
+        const maxInitialCandles = 150; // Show max 150 candles initially
+        const startIndex = Math.max(0, visibleData.length - maxInitialCandles);
+        const limitedData = visibleData.slice(startIndex);
+
+        const initialData = toKLineData(limitedData);
         setChartData(initialData);
 
         console.log(`[TradingChart] Engine created successfully with ${replayData.length} candles`);
+        console.log(`[TradingChart] Showing last ${limitedData.length} of ${visibleData.length} candles initially`);
 
         // Auto-play if isPlaying is already true (race condition fix)
         // This handles case where user clicked Play before data loaded
@@ -249,7 +266,7 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
             console.log('[TradingChart] Cleaning up engine');
             engine.destroy();
         };
-    }, [isReplayActive, replayData, playbackSpeed, setReplayIndex, timeframe]);
+    }, [isReplayActive, replayData, setReplayIndex, timeframe]); // playbackSpeed removed - handled by separate useEffect
 
     // Sync playback state with engine
     useEffect(() => {
@@ -408,60 +425,61 @@ export function TradingChart({ data, onPriceChange, className = '' }: TradingCha
             }
         }
 
-        // Process other indicator types normally (one per type)
+        // Process other indicator types dynamically
+        const processedTypes = new Set(['sma', 'ema']); // Already handled above
+
         indicators.forEach((indicator) => {
-            if (indicator.enabled) {
-                console.log(`Creating indicator: ${indicator.type}(${indicator.period})`);
+            if (indicator.enabled && !processedTypes.has(indicator.type)) {
+
+                const config = INDICATOR_CONFIG[indicator.type];
+                if (!config) {
+                    console.warn(`⚠️ No config found for indicator type: ${indicator.type}`);
+                    return;
+                }
+
+                console.log(`Creating indicator: ${indicator.type}(${indicator.period || 'default'})`);
+
                 try {
-                    if (indicator.type === 'rsi') {
-                        // ✅ Separate pane for RSI
-                        const result = chart.createIndicator(
-                            {
-                                name: 'RSI',
-                                calcParams: [indicator.period],
-                            },
-                            false, // not overlay
-                            { id: 'rsi-pane', height: 100 }
-                        );
-                        console.log('✅ Created RSI in separate pane, result:', result);
-                        activeTypes.push('RSI');
-                    } else if (indicator.type === 'macd') {
-                        // ✅ Separate pane for MACD
-                        const result = chart.createIndicator(
-                            {
-                                name: 'MACD',
-                                calcParams: [12, 26, 9],
-                            },
-                            false, // not overlay
-                            { id: 'macd-pane', height: 100 }
-                        );
-                        console.log('✅ Created MACD in separate pane, result:', result);
-                        activeTypes.push('MACD');
-                    } else if (indicator.type === 'bollinger') {
-                        // ✅ Overlay Bollinger Bands
-                        const result = chart.createIndicator(
-                            {
-                                name: 'BOLL',
-                                calcParams: [indicator.period, 2],
-                            },
-                            true, // overlay
-                            { id: 'candle_pane' }
-                        );
-                        console.log('✅ Created BOLLINGER overlay, result:', result);
-                        activeTypes.push('BOLL');
-                    } else if (indicator.type === 'sar') {
-                        // ✅ Overlay SAR
-                        const result = chart.createIndicator(
-                            {
-                                name: 'SAR',
-                                calcParams: [2, 0.02, 0.2],
-                            },
-                            true, // overlay
-                            { id: 'candle_pane' }
-                        );
-                        console.log('✅ Created SAR overlay, result:', result);
-                        activeTypes.push('SAR');
+                    // Determine pane and overlay settings
+                    const isMainPane = config.pane === 'main';
+                    const isOverlay = isMainPane;
+                    const paneId = isMainPane ? 'candle_pane' : `${indicator.type}-pane`;
+
+                    // Determine calcParams
+                    // If indicator has a specific period, use it. Otherwise fall back to config default.
+                    // Some indicators (MACD) might have fixed params in config, or multiple params.
+                    // For now, we support single period override if the indicator has 'period' property.
+                    let calcParams: number[] = [];
+
+                    if (indicator.period) {
+                        calcParams = [indicator.period];
+                        // Special handling for Bollinger (needs stdDev)
+                        if (indicator.type === 'bollinger') {
+                            calcParams = [indicator.period, 2];
+                        }
+                    } else if (config.defaultPeriod) {
+                        calcParams = [config.defaultPeriod];
                     }
+
+                    // If specific calcParams are needed for complex indicators (MACD, SAR), 
+                    // we might need to enhance the Indicator type or config.
+                    // For now, preserving hardcoded defaults for complex ones if not simple period:
+                    if (indicator.type === 'macd') calcParams = [12, 26, 9];
+                    if (indicator.type === 'sar') calcParams = [2, 0.02, 0.2];
+                    if (indicator.type === 'kdj') calcParams = [9, 3, 3];
+
+                    const result = chart.createIndicator(
+                        {
+                            name: config.name,
+                            calcParams: calcParams.length > 0 ? calcParams : undefined,
+                        },
+                        isOverlay,
+                        { id: paneId, height: 100 }
+                    );
+
+                    console.log(`✅ Created ${config.name} in ${paneId}, result:`, result);
+                    activeTypes.push(config.name);
+
                 } catch (e) {
                     console.error(`❌ Failed to create indicator ${indicator.id}:`, e);
                 }

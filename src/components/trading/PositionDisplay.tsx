@@ -6,6 +6,7 @@
 
 import { useMemo } from 'react';
 import { useTradingStore } from '@/stores';
+import { formatIDR, formatPercent } from '@/lib/format';
 
 interface PositionDisplayProps {
     currentPrice: number;
@@ -45,15 +46,7 @@ export function PositionDisplay({ currentPrice, className = '' }: PositionDispla
         return [...trades].reverse().slice(0, 5);
     }, [trades]);
 
-    const formatCurrency = (value: number) => {
-        const prefix = value >= 0 ? '+' : '';
-        return `${prefix}$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    };
 
-    const formatPercent = (value: number) => {
-        const prefix = value >= 0 ? '+' : '';
-        return `${prefix}${value.toFixed(2)}%`;
-    };
 
     return (
         <div className={`space-y-6 ${className}`}>
@@ -62,7 +55,7 @@ export function PositionDisplay({ currentPrice, className = '' }: PositionDispla
                 <div>
                     <div className="text-xs text-[var(--text-tertiary)] uppercase tracking-wider mb-1">Total Equity</div>
                     <div className="text-2xl font-bold font-mono tracking-tight">
-                        ${totalEquity.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        {formatIDR(totalEquity)}
                     </div>
                 </div>
 
@@ -70,13 +63,13 @@ export function PositionDisplay({ currentPrice, className = '' }: PositionDispla
                     <div>
                         <div className="text-[10px] text-[var(--text-tertiary)] uppercase mb-1">Return</div>
                         <div className={`font-mono text-sm font-medium ${totalReturn.absolute >= 0 ? 'text-[var(--color-profit)]' : 'text-[var(--color-loss)]'}`}>
-                            {formatCurrency(totalReturn.absolute)}
+                            {formatIDR(totalReturn.absolute)}
                         </div>
                     </div>
                     <div>
                         <div className="text-[10px] text-[var(--text-tertiary)] uppercase mb-1">% Return</div>
                         <div className={`font-mono text-sm font-medium ${totalReturn.absolute >= 0 ? 'text-[var(--color-profit)]' : 'text-[var(--color-loss)]'}`}>
-                            {formatPercent(totalReturn.percentage)}
+                            {formatPercent(totalReturn.percentage / 100)}
                         </div>
                     </div>
                 </div>
@@ -96,28 +89,28 @@ export function PositionDisplay({ currentPrice, className = '' }: PositionDispla
                         </div>
                         <div>
                             <div className="text-[10px] text-[var(--text-tertiary)]">Avg Price</div>
-                            <div className="font-mono text-[var(--text-primary)]">${position.avgPrice.toFixed(2)}</div>
+                            <div className="font-mono text-[var(--text-primary)]">{formatIDR(position.avgPrice, { roundToTickSize: true })}</div>
                         </div>
                         <div>
                             <div className="text-[10px] text-[var(--text-tertiary)]">Market Value</div>
                             <div className="font-mono text-[var(--text-primary)]">
-                                ${(position.shares * currentPrice).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                {formatIDR(position.shares * currentPrice)}
                             </div>
                         </div>
                         <div>
                             <div className="text-[10px] text-[var(--text-tertiary)]">Unrealized P&L</div>
                             <div className={`font-mono font-medium ${unrealizedPnL.absolute >= 0 ? 'text-[var(--color-profit)]' : 'text-[var(--color-loss)]'}`}>
-                                {formatCurrency(unrealizedPnL.absolute)}
+                                {formatIDR(unrealizedPnL.absolute)}
                             </div>
                         </div>
                     </div>
 
                     {/* Quick PnL Percentage Tag */}
                     <div className={`mt-2 py-1 px-2 rounded text-center text-xs font-bold ${unrealizedPnL.absolute >= 0
-                            ? 'bg-[var(--color-profit)]/10 text-[var(--color-profit)]'
-                            : 'bg-[var(--color-loss)]/10 text-[var(--color-loss)]'
+                        ? 'bg-[var(--color-profit)]/10 text-[var(--color-profit)]'
+                        : 'bg-[var(--color-loss)]/10 text-[var(--color-loss)]'
                         }`}>
-                        {formatPercent(unrealizedPnL.percentage)}
+                        {formatPercent(unrealizedPnL.percentage / 100)}
                     </div>
                 </div>
             ) : (
