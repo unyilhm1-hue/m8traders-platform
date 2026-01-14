@@ -7,7 +7,8 @@
 import { useChartStore } from '@/stores';
 import { AverageCalculator } from './AverageCalculator';
 import type { Timeframe, ReplayMode } from '@/types';
-import { JumpToControls, TimelineSlider, MarketTimeSelector } from '@/components/replay';
+import { JumpToControls, TimelineSlider, MarketTimeSelector, ModeSelector } from '@/components/replay';
+import { ScenarioSelector } from '@/components/replay/ScenarioSelector';
 import { Select } from '@/components/ui/Select';
 import { UI_ICONS } from '@/lib/chart/icons';
 import { Portal } from '@/components/ui/Portal';
@@ -191,6 +192,9 @@ export function CompactToolbar() {
                         className="w-[80px]"
                     />
 
+                    {/* Mode Selector */}
+                    <ModeSelector />
+
                     {/* Market Time Selector */}
                     <MarketTimeSelector />
 
@@ -199,6 +203,9 @@ export function CompactToolbar() {
 
                     {/* Jump To Controls */}
                     <JumpToControls />
+
+                    {/* Scenario Selector */}
+                    <ScenarioSelector />
                 </>
 
                 {/* Flexible Spacer */}
