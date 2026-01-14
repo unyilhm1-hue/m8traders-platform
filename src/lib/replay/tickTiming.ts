@@ -35,15 +35,12 @@ export function getTickInterval(
     const candleDuration = getTimeframeDuration(timeframe);
 
     // Speed multiplier (higher speed = shorter duration)
-    const speedMultipliers: Record<PlaybackSpeed, number> = {
-        0.5: 2, // half speed (2x slower)
-        1: 1, // normal
-        2: 0.5, // 2x faster
-        5: 0.2, // 5x faster
-        10: 0.1, // 10x faster
-    };
-
-    const multiplier = speedMultipliers[speed] || 1;
+    // Formula: multiplier = 1 / speed
+    // Speed 1x → multiplier 1.0 (normal)
+    // Speed 2x → multiplier 0.5 (2x faster)
+    // Speed 25x → multiplier 0.04 (25x faster)
+    // Speed 50x → multiplier 0.02 (50x faster)
+    const multiplier = 1 / speed;
 
     // Desired replay duration for this candle
     const replayDuration = candleDuration * multiplier;
