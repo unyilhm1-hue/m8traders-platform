@@ -13,6 +13,27 @@ import { mergeBatches } from '@/lib/data/dataMerger';
 import { resample } from '@/lib/data/resampler';
 
 /**
+ * Deep freeze utility for making scenario data truly immutable
+ */
+function deepFreeze<T>(obj: T): T {
+    // Freeze the object itself
+    Object.freeze(obj);
+
+    // Recursively freeze all properties
+    Object.getOwnPropertyNames(obj).forEach((prop) => {
+        const value = (obj as any)[prop];
+        if (value !== null && (typeof value === 'object' || typeof value === 'function')) {
+            // Only freeze if not already frozen
+            if (!Object.isFrozen(value)) {
+                deepFreeze(value);
+            }
+        }
+    });
+
+    return obj;
+}
+
+/**
  * Create a new scenario from batch windows
  */
 export async function createScenario(
@@ -64,11 +85,13 @@ export async function createScenario(
         },
     };
 
-    // Save to IndexedDB
+    // Save to IndexedDB (save unfrozen version)
     await saveScenario(scenario);
 
     console.log(`[ScenarioManager] Created scenario: ${scenario.name} (${scenario.totalCandles} candles)`);
-    return scenario;
+
+    // Return deep-frozen copy for immutability
+    return deepFreeze({ ...scenario });
 }
 
 /**
@@ -83,7 +106,9 @@ export async function loadScenario(scenarioId: string): Promise<ScenarioData | n
         const request = store.get(scenarioId);
 
         request.onsuccess = () => {
-            resolve(request.result || null);
+            const result = request.result;
+            // Deep freeze loaded scenario for immutability
+            resolve(result ? deepFreeze({ ...result }) : null);
         };
 
         request.onerror = () => {

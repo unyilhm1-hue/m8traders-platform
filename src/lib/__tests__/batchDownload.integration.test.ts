@@ -186,6 +186,13 @@ describe('Batch Download Integration', () => {
             expect(scenario.metadata?.difficulty).toBe('medium');
             expect(scenario.totalCandles).toBe(mockCandles.length * 2); // 2 batches
             expect(scenario.candles).toHaveLength(mockCandles.length * 2);
+
+            // Verify deep freeze invariants
+            expect(Object.isFrozen(scenario)).toBe(true); // Scenario object frozen
+            expect(Object.isFrozen(scenario.candles)).toBe(true); // Candles array frozen
+            expect(Object.isFrozen(scenario.candles[0])).toBe(true); // Individual candles frozen
+            expect(Object.isFrozen(scenario.windows)).toBe(true); // Windows array frozen
+            expect(Object.isFrozen(scenario.metadata)).toBe(true); // Metadata frozen
         });
 
         it('should load scenario and return frozen data', async () => {
@@ -220,6 +227,13 @@ describe('Batch Download Integration', () => {
             expect(loadedScenario!.id).toBe(createdScenario.id);
             expect(loadedScenario!.candles).toEqual(createdScenario.candles);
             expect(loadedScenario!.totalCandles).toBe(mockCandles.length);
+
+            // Verify loaded scenario is deeply frozen
+            expect(Object.isFrozen(loadedScenario)).toBe(true);
+            expect(Object.isFrozen(loadedScenario!.candles)).toBe(true);
+            expect(Object.isFrozen(loadedScenario!.candles[0])).toBe(true);
+            expect(Object.isFrozen(loadedScenario!.windows)).toBe(true);
+            expect(Object.isFrozen(loadedScenario!.metadata)).toBe(true);
         });
 
         it('should handle missing batches gracefully', async () => {
@@ -236,14 +250,6 @@ describe('Batch Download Integration', () => {
     });
 
     describe('Rate Limiting', () => {
-        beforeEach(() => {
-            vi.useFakeTimers();
-        });
-
-        afterEach(() => {
-            vi.useRealTimers();
-        });
-
         it('should respect rate limit delays between requests', async () => {
             const windows: BatchWindow[] = [
                 {
@@ -267,14 +273,13 @@ describe('Batch Download Integration', () => {
             ];
 
             // Start download (it will schedule timers)
-            const downloadPromise = downloadMultipleBatches('BBRI.JK', '5m', windows);
-
-            // There should be 2 delays (between 3 batches)
-            // Advance timers to let all downloads complete
-            await vi.advanceTimersByTimeAsync(5000);
-
-            // Wait for the promise to complete
-            const results = await downloadPromise;
+            const results = await downloadMultipleBatches(
+                'BBRI.JK',
+                '5m',
+                windows,
+                undefined,
+                10 // Fast rate limit for testing
+            );
 
             // Verify all batches were downloaded
             expect(results.size).toBe(3);

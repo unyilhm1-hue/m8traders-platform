@@ -86,7 +86,8 @@ export async function downloadMultipleBatches(
     ticker: string,
     interval: '1m' | '5m' | '15m' | '1h',
     windows: BatchWindow[],
-    onProgress?: (overall: number, current: BatchDownloadProgress) => void
+    onProgress?: (overall: number, current: BatchDownloadProgress) => void,
+    rateLimitMs: number = 1000 // Configurable rate limit
 ): Promise<Map<string, Candle[]>> {
     const results = new Map<string, Candle[]>();
     let completedCount = 0;
@@ -128,9 +129,9 @@ export async function downloadMultipleBatches(
             completedCount++;
             console.log(`[BatchDownloader] Progress: ${completedCount}/${windows.length} batches completed`);
 
-            // Rate limiting: wait 1 second between requests
+            // Rate limiting: wait configured time between requests
             if (completedCount < windows.length) {
-                await sleep(1000);
+                await sleep(rateLimitMs);
             }
 
         } catch (error: any) {
