@@ -161,7 +161,13 @@ async function fetchWithRetry(
                 return response;
             }
 
-            // Don't retry on 4xx errors (client errors)
+            // Handle 429 (Too Many Requests) - Retryable
+            if (response.status === 429) {
+                console.warn(`[BatchDownloader] Rate limited (429). Retrying...`);
+                throw new Error(`Rate limited: ${response.status}`);
+            }
+
+            // Don't retry on other 4xx errors (client errors)
             if (response.status >= 400 && response.status < 500) {
                 throw new Error(`Client error: ${response.status}`);
             }
@@ -170,7 +176,7 @@ async function fetchWithRetry(
             lastError = new Error(`Server error: ${response.status}`);
 
         } catch (error: any) {
-            // Immediately stop retrying if it's a client error (4xx)
+            // Immediately stop retrying if it's a client error (but not rate limited)
             if (error.message && error.message.startsWith('Client error')) {
                 throw error;
             }

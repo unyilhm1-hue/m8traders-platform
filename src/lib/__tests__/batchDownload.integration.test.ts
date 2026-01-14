@@ -77,8 +77,8 @@ describe('Batch Download Integration', () => {
             // Mock API failure
             (global.fetch as any).mockResolvedValueOnce({
                 ok: false,
-                status: 429,
-                statusText: 'Too Many Requests',
+                status: 404, // Use 404 (Client Error) to test fail-fast/no-retry
+                statusText: 'Not Found',
             });
 
             const windows: BatchWindow[] = [
