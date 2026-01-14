@@ -208,7 +208,9 @@ export const useChartStore = create<ChartState>()(
 
             setReplayIndex: (index) =>
                 set((state) => {
-                    state.replayIndex = index;
+                    // Clamp to valid range to prevent negative or out-of-bounds index
+                    const maxIndex = Math.max(0, state.replayData.length - 1);
+                    state.replayIndex = Math.max(0, Math.min(index, maxIndex));
                 }),
 
             setReplayData: (data) =>

@@ -266,7 +266,11 @@ export class ReplayEngine {
         const totalTicks = this.data.length * this.numTicks;
         const currentTick = this.currentCandleIndex * this.numTicks + this.currentTickIndex;
 
-        return (currentTick / totalTicks) * 100;
+        // Ensure progress reaches 100% on last tick
+        // Last tick: currentCandleIndex = data.length - 1, currentTickIndex = numTicks - 1
+        // currentTick = (data.length - 1) * numTicks + (numTicks - 1) = totalTicks - 1
+        // To reach 100%, we need: (totalTicks - 1) / (totalTicks - 1) = 100%
+        return (currentTick / (totalTicks - 1)) * 100;
     }
 
     /**

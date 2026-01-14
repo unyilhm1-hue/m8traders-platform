@@ -113,11 +113,13 @@ export function useKeyboardShortcuts(options: KeyboardShortcutsOptions = {}) {
         };
 
         const rewind = (candles: number) => {
+            if (replayData.length === 0) return; // Guard: prevent when no data
             const newIndex = Math.max(0, replayIndex - candles);
             setReplayIndex(newIndex);
         };
 
         const forward = (candles: number) => {
+            if (replayData.length === 0) return; // Guard: prevent when no data
             const newIndex = Math.min(replayData.length - 1, replayIndex + candles);
             setReplayIndex(newIndex);
         };

@@ -12,3 +12,9 @@ export {
     MODE_DESCRIPTIONS,
     getIntervalForSpeed,
 } from './config';
+
+// Intra-bar animation utilities
+export * from './pricePathGenerator';
+export * from './tickTiming';
+export * from './idxMarketHours';
+export * from './timeJump';
