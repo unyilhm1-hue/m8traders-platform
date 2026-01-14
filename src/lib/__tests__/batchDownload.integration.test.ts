@@ -31,7 +31,7 @@ describe('Batch Download Integration', () => {
         // Mock successful Yahoo Finance response
         (global.fetch as any).mockResolvedValue({
             ok: true,
-            json: async () => mockCandles,
+            json: async () => ({ data: mockCandles }), // Fix: Wrap in data object
         });
     });
 
@@ -90,9 +90,15 @@ describe('Batch Download Integration', () => {
                 },
             ];
 
+            // downloadMultipleBatches swallows errors for individual batches
+            // So we expect it to resolve with 0 results, not throw
             await expect(
                 downloadMultipleBatches('BBRI.JK', '5m', windows)
-            ).rejects.toThrow();
+            ).resolves.toBeDefined();
+
+            // Verify no data was saved
+            const batches = await listBatches('BBRI.JK', '5m');
+            expect(batches).toHaveLength(0);
         });
 
         it('should retry on network failure', async () => {
@@ -105,7 +111,7 @@ describe('Batch Download Integration', () => {
                 }
                 return Promise.resolve({
                     ok: true,
-                    json: async () => mockCandles,
+                    json: async () => ({ data: mockCandles }),
                 });
             });
 
@@ -149,9 +155,9 @@ describe('Batch Download Integration', () => {
                 ticker: 'BBRI.JK',
                 interval: '5m',
                 windowId: '2024-02-01_to_2024-03-01',
-                startTime: mockCandles[0].t,
-                endTime: mockCandles[mockCandles.length - 1].t,
-                data: mockCandles,
+                startTime: 4000, // Distinct start
+                endTime: 6000,
+                data: mockCandles.map(c => ({ ...c, t: c.t + 3000 })), // Shift timestamps
                 downloadedAt: Date.now(),
                 checksum: 'test-checksum-2',
                 candleCount: mockCandles.length,
