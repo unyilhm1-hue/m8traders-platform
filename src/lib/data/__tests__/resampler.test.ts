@@ -151,8 +151,9 @@ describe('Resampler', () => {
 
     describe('validateResample', () => {
         it('should validate timestamp alignment', () => {
-            const fiveMin = 5 * 60 * 1000;
-            const base = new Date('2024-01-01T09:00:00Z').getTime();
+            const fiveMin = 5 * 60 * 1000; // 300000ms
+            // Use a timestamp that's guaranteed to be aligned to 5m boundary
+            const base = Math.floor(new Date('2024-01-01T09:00:00Z').getTime() / fiveMin) * fiveMin;
 
             const validCandles: Candle[] = [
                 createCandle(base, 100, 105, 95, 102),
@@ -163,15 +164,20 @@ describe('Resampler', () => {
                 createCandle(base + 1000, 100, 105, 95, 102), // Not aligned
             ];
 
-            const original = [createCandle(base, 100, 105, 95, 102)];
+            // Original must have same or more candles than resampled
+            const original = [
+                createCandle(base, 100, 105, 95, 102),
+                createCandle(base + fiveMin, 102, 108, 100, 106),
+            ];
 
             expect(validateResample(original, validCandles, '5m').valid).toBe(true);
             expect(validateResample(original, invalidCandles, '5m').valid).toBe(false);
         });
 
         it('should validate OHLC logic (high ≥ open/close)', () => {
-            const validCandle = createCandle(1000, 100, 110, 95, 105);
-            const invalidCandle = createCandle(1000, 100, 95, 90, 105); // High < open/close
+            const fiveMin = 5 * 60 * 1000; // 300000ms
+            const validCandle = createCandle(fiveMin * 10, 100, 110, 95, 105); // Aligned timestamp
+            const invalidCandle = createCandle(fiveMin * 10, 100, 95, 90, 105); // High < open/close
 
             expect(validateResample([validCandle], [validCandle], '5m').valid).toBe(true);
             expect(validateResample([invalidCandle], [invalidCandle], '5m').valid).toBe(false);
@@ -181,7 +187,8 @@ describe('Resampler', () => {
         });
 
         it('should validate OHLC logic (low ≤ open/close)', () => {
-            const invalidCandle = createCandle(1000, 100, 110, 105, 102); // Low > open/close
+            const fiveMin = 5 * 60 * 1000; // 300000ms
+            const invalidCandle = createCandle(fiveMin * 10, 100, 110, 105, 102); // Low > open/close
 
             expect(validateResample([invalidCandle], [invalidCandle], '5m').valid).toBe(false);
             expect(validateResample([invalidCandle], [invalidCandle], '5m').issues).toContain(
