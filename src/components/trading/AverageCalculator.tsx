@@ -4,8 +4,9 @@
  */
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { UI_ICONS } from '@/lib/chart/icons';
+import { Portal } from '@/components/ui/Portal';
 
 export function AverageCalculator() {
     const [isOpen, setIsOpen] = useState(false);
@@ -14,7 +15,8 @@ export function AverageCalculator() {
     ]);
     const { Calculator } = UI_ICONS;
 
-    // ... (rest of logic unchanged, just needed the import)
+    const triggerRef = useRef<HTMLButtonElement>(null);
+    const [position, setPosition] = useState({ top: 0, left: 0 });
 
     const addEntry = () => {
         setEntries([...entries, { price: 0, shares: 0 }]);
@@ -40,10 +42,47 @@ export function AverageCalculator() {
 
     const avgPrice = calculate();
 
+    // Calculate position when opening
+    useEffect(() => {
+        if (isOpen && triggerRef.current) {
+            const rect = triggerRef.current.getBoundingClientRect();
+            setPosition({
+                top: rect.bottom + window.scrollY + 4,
+                left: rect.left + window.scrollX
+            });
+        }
+    }, [isOpen]);
+
+    // Handle scroll/resize to close or update
+    useEffect(() => {
+        if (!isOpen) return;
+        const handleScroll = () => setIsOpen(false); // Close on scroll for simplicity
+        window.addEventListener('scroll', handleScroll, true);
+        window.addEventListener('resize', handleScroll);
+        return () => {
+            window.removeEventListener('scroll', handleScroll, true);
+            window.removeEventListener('resize', handleScroll);
+        };
+    }, [isOpen]);
+
+    // Click outside to close
+    useEffect(() => {
+        if (!isOpen) return;
+        function handleClickOutside(event: MouseEvent) {
+            const dropdown = document.getElementById('calc-dropdown');
+            if (triggerRef.current && !triggerRef.current.contains(event.target as Node) && dropdown && !dropdown.contains(event.target as Node)) {
+                setIsOpen(false);
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [isOpen]);
+
     return (
         <div className="relative">
             {/* Toggle Button */}
             <button
+                ref={triggerRef}
                 onClick={() => setIsOpen(!isOpen)}
                 className={`
                     flex items-center gap-2 px-3 py-1.5 rounded transition-all border border-transparent
@@ -58,17 +97,17 @@ export function AverageCalculator() {
                 <span className="text-sm font-medium">Calc</span>
             </button>
 
-            {/* Calculator Modal */}
+            {/* Calculator Modal via Portal */}
             {isOpen && (
-                <>
-                    {/* Backdrop */}
+                <Portal>
                     <div
-                        className="fixed inset-0 bg-black/20 z-40"
-                        onClick={() => setIsOpen(false)}
-                    />
-
-                    {/* Modal */}
-                    <div className="absolute top-full right-0 mt-2 bg-[var(--bg-primary)] border border-[var(--bg-tertiary)] rounded-lg shadow-2xl p-4 min-w-[320px] z-50">
+                        id="calc-dropdown"
+                        className="fixed z-[9999] bg-[var(--bg-primary)] border border-[var(--bg-tertiary)] rounded-lg shadow-2xl p-4 min-w-[320px] animate-in fade-in zoom-in-95 duration-100"
+                        style={{
+                            top: position.top - window.scrollY,
+                            left: position.left - window.scrollX
+                        }}
+                    >
                         <div className="flex items-center justify-between mb-4">
                             <h3 className="font-semibold text-[var(--text-primary)]">
                                 Average Calculator
@@ -82,7 +121,7 @@ export function AverageCalculator() {
                         </div>
 
                         {/* Entries */}
-                        <div className="space-y-2 mb-4">
+                        <div className="space-y-2 mb-4 max-h-[300px] overflow-y-auto pr-1">
                             {entries.map((entry, index) => (
                                 <div key={index} className="flex items-center gap-2">
                                     <input
@@ -136,7 +175,7 @@ export function AverageCalculator() {
                             </div>
                         </div>
                     </div>
-                </>
+                </Portal>
             )}
         </div>
     );

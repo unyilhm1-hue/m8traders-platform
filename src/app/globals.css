@@ -180,3 +180,12 @@ body {
 .glow-loss {
   box-shadow: 0 0 15px rgba(246, 70, 93, 0.3);
 }
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}

@@ -75,24 +75,24 @@ export function JumpToControls() {
     }
 
     return (
-        <div className="flex items-center gap-0.5 bg-[var(--bg-tertiary)] p-0.5 rounded-lg border border-[var(--bg-subtle-border)]">
-            {sessions.map((session) => {
-                const sessionInfo = US_SESSIONS[session];
-                return (
-                    <button
-                        key={session}
-                        onClick={() => jumpToTime(sessionInfo.hour, sessionInfo.minute)}
-                        className="w-7 h-7 flex items-center justify-center rounded text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-all relative group"
-                        title={`${sessionInfo.label} (${String(sessionInfo.hour).padStart(2, '0')}:${String(sessionInfo.minute).padStart(2, '0')})`}
-                    >
-                        {getSessionIcon(session)}
-                        {/* Tooltip */}
-                        <span className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 px-2 py-1 bg-[var(--bg-secondary)] border border-[var(--bg-subtle-border)] rounded text-[10px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg z-50">
-                            {sessionInfo.label}
-                        </span>
-                    </button>
-                );
-            })}
+        <div className="flex items-center gap-2">
+            <span className="text-xs text-[var(--text-secondary)] font-medium hidden 2xl:block">Jump to:</span>
+            <div className="flex items-center gap-1 bg-[var(--bg-tertiary)] p-0.5 rounded-lg border border-[var(--bg-subtle-border)]">
+                {sessions.map((session) => {
+                    const sessionInfo = US_SESSIONS[session];
+                    return (
+                        <button
+                            key={session}
+                            onClick={() => jumpToTime(sessionInfo.hour, sessionInfo.minute)}
+                            className="flex items-center gap-1.5 px-2 py-1 rounded text-[10px] whitespace-nowrap font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-all relative group"
+                            title={`${sessionInfo.label} (${String(sessionInfo.hour).padStart(2, '0')}:${String(sessionInfo.minute).padStart(2, '0')})`}
+                        >
+                            {getSessionIcon(session)}
+                            <span>{sessionInfo.label}</span>
+                        </button>
+                    );
+                })}
+            </div>
         </div>
     );
 }

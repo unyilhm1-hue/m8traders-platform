@@ -31,6 +31,7 @@ export function Select({
 }: SelectProps) {
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
+    const [position, setPosition] = useState({ top: 0, left: 0, width: 0 });
 
     const selectedOption = options.find(opt => opt.value === value);
 
@@ -38,12 +39,50 @@ export function Select({
     useEffect(() => {
         function handleClickOutside(event: MouseEvent) {
             if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+                // Check if click is inside the portal dropdown
+                const dropdown = document.getElementById(`select-dropdown-${placeholder.replace(/\s/g, '')}`);
+                if (dropdown && dropdown.contains(event.target as Node)) {
+                    return;
+                }
                 setIsOpen(false);
             }
         }
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
+    }, [placeholder]);
+
+    // Calculate position when opening
+    useEffect(() => {
+        if (isOpen && containerRef.current) {
+            const rect = containerRef.current.getBoundingClientRect();
+            setPosition({
+                top: rect.bottom + window.scrollY + 4, // 4px offset
+                left: rect.left + window.scrollX,
+                width: rect.width
+            });
+        }
+    }, [isOpen]);
+
+    // Handle scroll to update position or close
+    useEffect(() => {
+        if (!isOpen) return;
+        const handleScroll = () => {
+            if (containerRef.current) {
+                const rect = containerRef.current.getBoundingClientRect();
+                setPosition({
+                    top: rect.bottom + window.scrollY + 4,
+                    left: rect.left + window.scrollX,
+                    width: rect.width
+                });
+            }
+        };
+        window.addEventListener('scroll', handleScroll, true);
+        window.addEventListener('resize', handleScroll);
+        return () => {
+            window.removeEventListener('scroll', handleScroll, true);
+            window.removeEventListener('resize', handleScroll);
+        };
+    }, [isOpen]);
 
     return (
         <div className={`relative ${className}`} ref={containerRef}>
@@ -55,7 +94,7 @@ export function Select({
                     bg-[var(--bg-tertiary)] hover:bg-[var(--bg-hover)] 
                     text-[var(--text-primary)] text-sm rounded transition-colors
                     border border-transparent focus:border-[var(--accent-primary)]
-                    min-w-[100px]
+                    min-w-[100px] w-full
                     ${triggerClassName}
                 `}
             >
@@ -84,9 +123,17 @@ export function Select({
                 </svg>
             </button>
 
-            {/* Dropdown Menu */}
+            {/* Dropdown Menu via Portal */}
             {isOpen && (
-                <div className="absolute top-full left-0 z-50 mt-1 w-full min-w-[140px] max-h-[300px] overflow-y-auto rounded-lg border border-[var(--bg-subtle-border)] bg-[var(--bg-secondary)] shadow-xl animate-in fade-in zoom-in-95 duration-100">
+                <div
+                    id={`select-dropdown-${placeholder.replace(/\s/g, '')}`}
+                    className="fixed z-[9999] rounded-lg border border-[var(--bg-subtle-border)] bg-[var(--bg-secondary)] shadow-xl animate-in fade-in zoom-in-95 duration-100 overflow-y-auto max-h-[300px]"
+                    style={{
+                        top: position.top - window.scrollY, // Adjust for fixed position relative to viewport
+                        left: position.left - window.scrollX,
+                        width: Math.max(position.width, 140) // Min width 140px
+                    }}
+                >
                     <div className="p-1">
                         {options.map((option) => (
                             <button

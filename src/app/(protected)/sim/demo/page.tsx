@@ -31,18 +31,18 @@ export default function SimDemoPage() {
     }, [checkAndFillOrders]);
 
     return (
-        <div className="h-screen flex flex-col overflow-hidden">
+        <div className="h-[100dvh] flex flex-col overflow-hidden">
             {/* Compact Toolbar */}
             <CompactToolbar />
 
             {/* Main Layout */}
-            <div className="flex-1 flex overflow-hidden">
+            <div className="flex-1 flex overflow-hidden min-h-0">
                 {/* Left: Drawing Sidebar */}
                 <DrawingSidebar />
 
                 {/* Center: Chart Area */}
-                <div className="flex-1 flex flex-col overflow-hidden">
-                    <div className="flex-1">
+                <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+                    <div className="flex-1 min-h-0">
                         <TradingChart onPriceChange={handlePriceChange} />
                     </div>
                 </div>
