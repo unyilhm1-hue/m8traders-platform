@@ -163,7 +163,17 @@ async function fetchWithRetry(
 
             // Handle 429 (Too Many Requests) - Retryable
             if (response.status === 429) {
-                console.warn(`[BatchDownloader] Rate limited (429). Retrying...`);
+                const retryAfter = response.headers.get('Retry-After');
+                const retryDelay = parseRetryAfterMs(retryAfter);
+                console.warn(`[BatchDownloader] Rate limited (429). Retry-After: ${retryAfter || 'N/A'}`);
+
+                // If Retry-After is present, throw special error to pass delay up
+                if (retryDelay !== null) {
+                    const error = new Error(`Rate limited: ${response.status}`);
+                    (error as any).retryDelay = retryDelay;
+                    throw error;
+                }
+
                 throw new Error(`Rate limited: ${response.status}`);
             }
 
@@ -183,9 +193,15 @@ async function fetchWithRetry(
             lastError = error;
         }
 
-        // Exponential backoff
+        // Calculate delay
+        let delay = initialDelayMs * Math.pow(2, attempt);
+
+        // Use custom delay if available (from Retry-After)
+        if (lastError && (lastError as any).retryDelay) {
+            delay = (lastError as any).retryDelay;
+        }
+
         if (attempt < maxRetries - 1) {
-            const delay = initialDelayMs * Math.pow(2, attempt);
             console.log(`[BatchDownloader] Retry ${attempt + 1}/${maxRetries} after ${delay}ms...`);
             await sleep(delay);
         }
@@ -209,6 +225,7 @@ export function estimateDownloadTime(
     averageWindowSizeDays: number
 ): { seconds: number; formatted: string } {
     // Rough estimate: 2 seconds per request + 1 second rate limit
+    // Rough estimate: 2 seconds per request + 1 second rate limit
     const secondsPerWindow = 3;
     const totalSeconds = windowCount * secondsPerWindow;
 
@@ -220,4 +237,26 @@ export function estimateDownloadTime(
         : `${seconds}s`;
 
     return { seconds: totalSeconds, formatted };
+}
+
+/**
+ * Parse Retry-After header (seconds or HTTP-date) to milliseconds
+ */
+function parseRetryAfterMs(headerValue: string | null): number | null {
+    if (!headerValue) return null;
+
+    // Try parsing as seconds
+    const seconds = parseInt(headerValue, 10);
+    if (!isNaN(seconds)) {
+        return seconds * 1000;
+    }
+
+    // Try parsing as HTTP-date
+    const date = Date.parse(headerValue);
+    if (!isNaN(date)) {
+        const delta = date - Date.now();
+        return Math.max(0, delta);
+    }
+
+    return null;
 }
