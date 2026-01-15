@@ -93,6 +93,12 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
                         console.log(`[useSimulationEngine] Candle ${event.data.candleIndex}`);
                         break;
 
+                    case 'PLAYBACK_STATE':
+                        // ✅ NEW: Sync playback state from worker
+                        console.log(`[useSimulationEngine] Playback state: ${event.data.isPlaying ? 'Playing' : 'Paused'} at ${event.data.speed}x`);
+                        // Store can listen to this if needed for UI updates
+                        break;
+
                     case 'COMPLETE':
                         console.log('[useSimulationEngine] Simulation complete');
                         break;

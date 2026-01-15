@@ -310,8 +310,7 @@ class SimulationEngine {
     // Current candle tick data
     private pricePath: number[] = [];
     private volumePath: number[] = [];
-    private numTicks: number = 20; // ticks per candle
-    private baseTickDuration: number = 100; // ms per tick at 1x speed
+    private numTicks: number = 60; // ✅ Increased from 20 to 60 for smoother movement (1 tick/second at 1x)
 
     // ✅ Throttling for 60 FPS (16ms target)
     private lastMessageTime: number = 0;
@@ -378,7 +377,7 @@ class SimulationEngine {
         }
     }
 
-    // UPDATED: play() now assumes data already loaded
+    // UPDATED: play() with duplicate interval protection
     play(speed: number = 1) {
         if (this.candles.length === 0) {
             console.error('[SimulationWorker] No data loaded. Call INIT_DATA first.');
@@ -386,16 +385,31 @@ class SimulationEngine {
             return;
         }
 
+        // ✅ FIX: Prevent duplicate intervals if already playing
+        if (this.isPlaying && this.tickInterval !== null) {
+            console.warn('[SimulationWorker] Already playing, ignoring duplicate play() call');
+            return;
+        }
+
         console.log(`[SimulationWorker] Playing at ${speed}x speed`);
         this.playbackSpeed = speed;
         this.isPlaying = true;
+
+        // ✅ FIX: Always clean up before starting (safety measure)
+        this.stopTickLoop();
         this.startTickLoop();
+
+        // Notify frontend that playback has started
+        postMessage({ type: 'PLAYBACK_STATE', isPlaying: true, speed: this.playbackSpeed });
     }
 
     pause() {
         console.log('[SimulationWorker] Paused');
         this.isPlaying = false;
         this.stopTickLoop();
+
+        // ✅ FIX: Notify frontend immediately when paused
+        postMessage({ type: 'PLAYBACK_STATE', isPlaying: false, speed: this.playbackSpeed });
     }
 
     stop() {
@@ -417,11 +431,15 @@ class SimulationEngine {
         console.log(`[SimulationWorker] Speed changed to ${speed}x`);
         this.playbackSpeed = speed;
 
-        // Restart interval with new speed if playing
+        // ✅ FIX: Always stop first, then restart if playing (prevents race condition)
+        this.stopTickLoop();
+
         if (this.isPlaying) {
-            this.stopTickLoop();
             this.startTickLoop();
         }
+
+        // Notify frontend of speed change
+        postMessage({ type: 'PLAYBACK_STATE', isPlaying: this.isPlaying, speed: this.playbackSpeed });
     }
 
     private regeneratePaths() {
@@ -449,8 +467,13 @@ class SimulationEngine {
         };
     }
 
-    private updateAggregatedCandle(price: number) {
+    private updateAggregatedCandle(price: number, timestamp: number) {
         if (!this.currentAggregatedCandle) return;
+
+        // ✅ FIX: Update timestamp to current tick's time (monotonically increasing!)
+        // This ensures each CANDLE_UPDATE has a unique, increasing timestamp
+        // Lightweight Charts silently ignores updates with duplicate timestamps
+        this.currentAggregatedCandle.time = Math.floor(timestamp / 1000);
 
         // Update high/low/close as ticks come in
         this.currentAggregatedCandle.high = Math.max(this.currentAggregatedCandle.high, price);
@@ -459,7 +482,26 @@ class SimulationEngine {
     }
 
     private startTickLoop() {
-        const tickDuration = this.baseTickDuration / this.playbackSpeed;
+        // ✅ REAL-TIME PLAYBACK MODE
+        // 1m candle at 1x speed = 60 seconds real-time
+        // 5m candle at 1x speed = 300 seconds real-time
+        // Speed multiplier: 10x makes 1m candle = 6 seconds
+
+        const candle = this.candles[this.currentCandleIndex];
+        const nextCandle = this.candles[this.currentCandleIndex + 1];
+
+        // Calculate actual candle duration from data
+        const candleDuration = nextCandle
+            ? (nextCandle.t - candle.t)
+            : 60000; // Fallback to 1 minute
+
+        // Calculate base tick duration for 1x speed
+        const baseTickDuration = candleDuration / this.numTicks;
+
+        // Adjust for playback speed (higher speed = shorter tick duration)
+        const tickDuration = baseTickDuration / this.playbackSpeed;
+
+        console.log(`[SimulationWorker] ⏱️ Real-time mode: ${tickDuration}ms per tick (candle: ${candleDuration}ms, speed: ${this.playbackSpeed}x, total: ${candleDuration / this.playbackSpeed}ms per candle)`);
 
         this.tickInterval = setInterval(() => {
             this.processTick();
@@ -502,8 +544,8 @@ class SimulationEngine {
             tickIndex: this.currentTickIndex,
         };
 
-        // Update aggregated candle
-        this.updateAggregatedCandle(price);
+        // Update aggregated candle with current tick's price AND timestamp
+        this.updateAggregatedCandle(price, timestamp);
 
         // ✅ FIX: Sync candle updates with tick tempo (speed-independent)
         const isFirstTick = this.currentTickIndex === 0;
@@ -522,24 +564,20 @@ class SimulationEngine {
             this.lastMessageTime = now;
         }
 
-        // ✅ CANDLE UPDATE: Tick-based + Time throttle (prevent flooding!)
-        // Combine adaptive frequency with time-based limit
-        const timeSinceCandleUpdate = now - this.lastCandleUpdateTime;
-        const TICKS_PER_UPDATE = this.playbackSpeed > 1 ? 1 : 2;
+        // ✅ CANDLE UPDATE: Send on every tick (no extra throttling needed!)
+        // Ticks are already rate-limited (1/second at 1x), so no need for time-based throttle
+        // This ensures chart never freezes while orderbook updates
 
         const shouldSendCandleUpdate =
-            (this.currentTickIndex % TICKS_PER_UPDATE === 0 &&
-                timeSinceCandleUpdate >= this.CANDLE_UPDATE_THROTTLE_MS) || // Time guard
-            isFirstTick || // Always send on open
-            isLastTick;    // Always send on close
+            isFirstTick ||  // Always send on candle open
+            isLastTick ||   // Always send on candle close  
+            true;           // Send on EVERY tick for smooth growth
 
-        // Send candle updates (max 20 Hz)
         if (shouldSendCandleUpdate && this.currentAggregatedCandle) {
             postMessage({
                 type: 'CANDLE_UPDATE',
                 candle: this.currentAggregatedCandle
             });
-            this.lastCandleUpdateTime = now; // Track last send time
         }
 
         // Advance tick

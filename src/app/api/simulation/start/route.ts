@@ -4,7 +4,7 @@ import path from 'path';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: Request) {
     try {
         const dataDir = path.join(process.cwd(), 'public', 'simulation-data');
 
@@ -17,26 +17,95 @@ export async function GET() {
             return NextResponse.json({ error: 'No files' }, { status: 404 });
         }
 
-        // --- PAKSA FILE YANG BENAR (HARDCODE UNTUK DEBUG) ---
-        // Agar tidak terpilih file tahun 2016
-        const targetFile = 'ASII_full_30days.json';
-        const randomFile = files.includes(targetFile) ? targetFile : files[0];
+        // Parse query params for specific ticker, date, and interval request
+        const { searchParams } = new URL(request.url);
 
-        const filePath = path.join(dataDir, randomFile);
+        // ✅ NEW: Accept ticker and date params (with smart defaults for backward compat)
+        const requestedTicker = searchParams.get('ticker') || 'ASII'; // Default to ASII
+        const requestedDate = searchParams.get('date'); // Optional (null = any date)
+        const requestedInterval = searchParams.get('interval') || '1m'; // Default to 1m
+
+        // Clean ticker (remove .JK suffix)
+        const cleanTicker = requestedTicker.replace('.JK', '').replace('.', '_');
+
+        console.log(`[API/Start] 🔍 Looking for: ${cleanTicker}, interval: ${requestedInterval}, date: ${requestedDate || 'any'}`);
+
+        // Filter files based on ALL params: ticker, interval, and optionally date
+        const matchedFiles = files.filter(f => {
+            // Special case: Legacy full month file (always ASII 1m)
+            if (f === 'ASII_full_30days.json') {
+                return cleanTicker === 'ASII' && requestedInterval === '1m' && !requestedDate;
+            }
+
+            // Pattern 1: TICKER_INTERVAL_DATE.json (new format)
+            const newMatch = f.match(/^([A-Z_.]+)_(\d+[md])_(\d{4}-\d{2}-\d{2})\.json$/);
+            if (newMatch) {
+                const [, fTicker, fInterval, fDate] = newMatch;
+                const tickerMatch = fTicker === cleanTicker;
+                const intervalMatch = fInterval === requestedInterval;
+                const dateMatch = !requestedDate || fDate === requestedDate;
+                return tickerMatch && intervalMatch && dateMatch;
+            }
+
+            // Pattern 2: TICKER_DATE.json (legacy 1m format)
+            if (requestedInterval === '1m') {
+                const legacyMatch = f.match(/^([A-Z_.]+)_(\d{4}-\d{2}-\d{2})\.json$/);
+                if (legacyMatch) {
+                    const [, fTicker, fDate] = legacyMatch;
+                    const tickerMatch = fTicker === cleanTicker;
+                    const dateMatch = !requestedDate || fDate === requestedDate;
+                    return tickerMatch && dateMatch;
+                }
+            }
+
+            return false;
+        });
+
+        // Select file: deterministic (first match) instead of random
+        let selectedFile: string;
+
+        if (matchedFiles.length > 0) {
+            // Perfect match found! Take first (deterministic)
+            selectedFile = matchedFiles[0];
+            console.log(`[API/Start] ✅ Found ${matchedFiles.length} match(es), selected: ${selectedFile}`);
+        } else {
+            // No exact match - fallback to interval-only match
+            console.warn(`[API/Start] ⚠️ No match for ${cleanTicker}_${requestedInterval}${requestedDate ? `_${requestedDate}` : ''}`);
+            const intervalFiles = files.filter(f => f.includes(`_${requestedInterval}_`));
+            selectedFile = intervalFiles.length > 0 ? intervalFiles[0] : files[0];
+            console.warn(`[API/Start] 📁 Fallback to: ${selectedFile}`);
+        }
+
+
+        const filePath = path.join(dataDir, selectedFile);
         const fileContent = fs.readFileSync(filePath, 'utf-8');
         const rawData = JSON.parse(fileContent);
 
         // Ambil ticker dari nama file
-        const ticker = randomFile.split('_')[0] || 'UNKNOWN';
+        const ticker = selectedFile.split('_')[0] || 'UNKNOWN';
 
         // ✅ Extract date from filename (for HH:MM-only format support)
         // Format: "TICKER_YYYY-MM-DD.json" or "TICKER_full_30days.json"
-        const filenameParts = randomFile.replace('.json', '').split('_');
+        const filenameParts = selectedFile.replace('.json', '').split('_');
         const dateFromFilename = filenameParts.length >= 2 && filenameParts[1].match(/^\d{4}-\d{2}-\d{2}$/)
             ? filenameParts[1]
             : null;
 
         // --- DATA PROCESSING WITH FORMAT DETECTION ---
+        // ✅ Calculate interval multiplier for timestamp adjustment
+        const intervalMultipliers: Record<string, number> = {
+            '1m': 1,    // 60s
+            '2m': 2,    // 120s
+            '5m': 5,    // 300s
+            '15m': 15,  // 900s
+            '30m': 30,  // 1800s
+            '60m': 60,  // 3600s
+        };
+        const baseIntervalMs = 60000; // 1 minute in ms
+        const multiplier = intervalMultipliers[requestedInterval] || 1;
+
+        console.log(`[API/Start] Applying ${multiplier}x timestamp multiplier for ${requestedInterval}`);
+
         const candlesWithTimestamp = rawData.map((candle: any, index: number) => {
             let timestamp: number;
 
@@ -52,9 +121,14 @@ export async function GET() {
                     const timePart = candle.time.length === 5 ? `${candle.time}:00` : candle.time;
                     const fullDatetime = `${dateFromFilename}T${timePart}Z`;
                     timestamp = new Date(fullDatetime).getTime();
+
+                    // ✅ Adjust timestamp based on interval
+                    // For 5m: each candle should be 5 minutes apart
+                    // So add index * 5 * 60000ms instead of just index * 60000ms
+                    timestamp = timestamp + (index * baseIntervalMs * (multiplier - 1));
                 } else {
                     // No date in filename - cannot parse reliably
-                    console.warn(`[API] Time-only format "${candle.time}" but no date in filename "${randomFile}"`);
+                    console.warn(`[API] Time-only format "${candle.time}" but no date in filename "${selectedFile}"`);
                     timestamp = NaN;
                 }
             } else {
@@ -68,7 +142,7 @@ export async function GET() {
                 // Fallback: use current time + offset (last resort)
                 console.warn(`[API] Using fallback timestamp for candle ${index}: "${candle.time}"`);
                 return {
-                    t: Date.now() + (index * 60000),
+                    t: Date.now() + (index * baseIntervalMs * multiplier),
                     o: candle.open,
                     h: candle.high,
                     l: candle.low,
