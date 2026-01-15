@@ -124,6 +124,9 @@ export const TradingChart = memo(function TradingChart({ className = '' }: Tradi
 
     // --- C. REALTIME UPDATE (Direct Subscription) ---
     useEffect(() => {
+        // Ref untuk track waktu update terakhir (prevent time regression)
+        const lastUpdateTimeRef = { current: 0 };
+
         // Subscribe langsung ke perubahan currentCandle di Store
         // Ini bypass siklus render React sepenuhnya (Super Cepat)
         const unsubscribe = useSimulationStore.subscribe(
@@ -141,6 +144,15 @@ export const TradingChart = memo(function TradingChart({ className = '' }: Tradi
                     time = new Date(time).getTime() / 1000;
                 }
 
+                // ✅ TIME REGRESSION CHECK: Prevent backwards time updates
+                if (time < lastUpdateTimeRef.current) {
+                    console.warn('[TradingChart] ⚠️ Time regression detected, skipping update', {
+                        lastTime: lastUpdateTimeRef.current,
+                        newTime: time
+                    });
+                    return; // Skip this update
+                }
+
                 // 2. Update Chart (Ringan)
                 candleSeriesRef.current.update({
                     time: time as Time,
@@ -149,6 +161,9 @@ export const TradingChart = memo(function TradingChart({ className = '' }: Tradi
                     low: currentCandle.low,
                     close: currentCandle.close,
                 });
+
+                // Track last update time
+                lastUpdateTimeRef.current = time as number;
             }
         );
 
