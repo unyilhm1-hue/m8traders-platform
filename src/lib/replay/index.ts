@@ -3,7 +3,7 @@
  * Main entry point for replay functionality
  */
 
-export { ReplayEngine } from './ReplayEngine';
+// Replay configuration and constants
 export {
     PLAYBACK_SPEEDS,
     BASE_INTERVAL_MS,

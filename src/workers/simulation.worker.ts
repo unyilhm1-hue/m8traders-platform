@@ -313,9 +313,8 @@ class SimulationEngine {
     private numTicks: number = 20; // ticks per candle
     private baseTickDuration: number = 100; // ms per tick at 1x speed
 
-    // ✅ NEW: Throttling for 60 FPS (16ms target)
+    // ✅ Throttling for 60 FPS (16ms target)
     private lastMessageTime: number = 0;
-    private lastCandleUpdateTime: number = 0; // Separate tracker for candle updates
     private readonly MESSAGE_THROTTLE_MS: number = 16; // ~60 FPS
 
     // Aggregated candle (for Lightweight Charts)
