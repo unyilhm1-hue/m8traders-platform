@@ -19,6 +19,7 @@ import { formatPrice, formatIDR } from '@/lib/format';
 
 export default function SimDemoPage() {
     const [activeTab, setActiveTab] = useState<'position' | 'pending' | 'trades'>('position');
+    const [isWorkerDataReady, setIsWorkerDataReady] = useState(false);
     const { balance, checkAndFillOrders } = useTradingStore();
 
     // ✅ Initialize simulation engine (manual control via DateSelector)
@@ -113,11 +114,9 @@ export default function SimDemoPage() {
                     console.log(`📨 [SimDemoPage] Sending ${simulationCandles.length} candles to worker...`);
                     engine.initWithData(simulationCandles);
 
-                    // Auto-play to start tick generation for orderbook
-                    setTimeout(() => {
-                        console.log('▶️ [SimDemoPage] Auto-starting playback...');
-                        engine.play(1); // Start at 1x speed
-                    }, 500); // Small delay to ensure worker processed INIT_DATA
+                    // ✅ FIX: Set ready state untuk trigger auto-play via useEffect
+                    // Hapus setTimeout race condition
+                    setIsWorkerDataReady(true);
                 } else if (!engine) {
                     console.warn('⚠️ [SimDemoPage] Engine not ready yet');
                 } else {
@@ -131,6 +130,16 @@ export default function SimDemoPage() {
 
         initSimulation();
     }, [engine]); // Run once on mount (engine dependency for safety)
+
+    // ✅ FIX: Event-driven auto-play (no race condition)
+    // Trigger play ONLY after DATA_READY confirmed
+    useEffect(() => {
+        if (isWorkerDataReady && engine) {
+            console.log('▶️ [SimDemoPage] Auto-starting playback (data ready)...');
+            engine.play(1); // Start at 1x speed
+            setIsWorkerDataReady(false); // Prevent re-trigger
+        }
+    }, [isWorkerDataReady, engine]);
 
     // Handle price updates for order filling
     useEffect(() => {

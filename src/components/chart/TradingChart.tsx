@@ -11,6 +11,7 @@ import {
     type Time,
 } from 'lightweight-charts';
 import { useSimulationStore } from '@/stores/useSimulationStore';
+import { simTelemetry } from '@/lib/telemetry';
 
 interface TradingChartProps {
     className?: string;
@@ -22,8 +23,12 @@ export const TradingChart = memo(function TradingChart({ className = '' }: Tradi
     const mainChartRef = useRef<IChartApi | null>(null);
     const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
 
-    // 2. Ref untuk mencegah reload history yang tidak perlu
+    // Ref untuk mencegah reload history yang tidak perlu
     const historyLoadedRef = useRef<number>(0);
+
+    // ✅ Refs for realtime update batching (must be at top-level)
+    const lastUpdateTimeRef = useRef<number>(0);
+    const pendingUpdateRef = useRef<CandlestickData | null>(null);
 
     // Ambil history dari store
     const candleHistory = useSimulationStore((state) => state.candleHistory);
@@ -100,6 +105,10 @@ export const TradingChart = memo(function TradingChart({ className = '' }: Tradi
         try {
             console.log(`[Chart] 📥 Loading History (${candleHistory.length} candles)...`);
 
+            // ✅ FIX: Reset time guard saat load history baru
+            // Prevent rejection of first updates from new simulation
+            lastUpdateTimeRef.current = 0;
+
             const candleData: CandlestickData[] = candleHistory.map((c) => ({
                 time: c.time as Time,
                 open: c.open,
@@ -122,17 +131,43 @@ export const TradingChart = memo(function TradingChart({ className = '' }: Tradi
         }
     }, [candleHistory]);
 
-    // --- C. REALTIME UPDATE (Direct Subscription) ---
+    // --- C. REALTIME UPDATE (rAF Batching for Stability) ---
     useEffect(() => {
-        // Ref untuk track waktu update terakhir (prevent time regression)
-        const lastUpdateTimeRef = { current: 0 };
+        // RAF ID for cleanup
+        let rafId: number | null = null;
+
+        // Flush buffer to chart (called by rAF)
+        const flushUpdate = () => {
+            rafId = null;
+            if (!pendingUpdateRef.current || !candleSeriesRef.current) return;
+
+            const update = pendingUpdateRef.current;
+
+            // ✅ TIME REGRESSION CHECK: Prevent backwards time updates
+            if ((update.time as number) < lastUpdateTimeRef.current) {
+                console.warn('[TradingChart] ⚠️ Time regression detected, skipping update', {
+                    lastTime: lastUpdateTimeRef.current,
+                    newTime: update.time
+                });
+                simTelemetry.recordTimeRegression(); // 📊 Track regression
+                pendingUpdateRef.current = null;
+                return;
+            }
+
+            // Apply update to chart
+            candleSeriesRef.current.update(update);
+            lastUpdateTimeRef.current = update.time as number;
+            pendingUpdateRef.current = null;
+
+            // 📊 Telemetry: Track candle update
+            simTelemetry.recordCandleUpdate();
+        };
 
         // Subscribe langsung ke perubahan currentCandle di Store
-        // Ini bypass siklus render React sepenuhnya (Super Cepat)
         const unsubscribe = useSimulationStore.subscribe(
             (state) => {
                 const currentCandle = state.currentCandle;
-                if (!currentCandle || !candleSeriesRef.current) return;
+                if (!currentCandle) return;
 
                 // 1. Sanitasi Waktu
                 let time = currentCandle.time;
@@ -144,30 +179,28 @@ export const TradingChart = memo(function TradingChart({ className = '' }: Tradi
                     time = new Date(time).getTime() / 1000;
                 }
 
-                // ✅ TIME REGRESSION CHECK: Prevent backwards time updates
-                if (time < lastUpdateTimeRef.current) {
-                    console.warn('[TradingChart] ⚠️ Time regression detected, skipping update', {
-                        lastTime: lastUpdateTimeRef.current,
-                        newTime: time
-                    });
-                    return; // Skip this update
-                }
-
-                // 2. Update Chart (Ringan)
-                candleSeriesRef.current.update({
+                // 2. Buffer update (akan di-flush di next frame)
+                pendingUpdateRef.current = {
                     time: time as Time,
                     open: currentCandle.open,
                     high: currentCandle.high,
                     low: currentCandle.low,
                     close: currentCandle.close,
-                });
+                };
 
-                // Track last update time
-                lastUpdateTimeRef.current = time as number;
+                // 3. Schedule rAF flush (jika belum scheduled)
+                if (rafId === null) {
+                    rafId = requestAnimationFrame(flushUpdate);
+                }
             }
         );
 
-        return () => unsubscribe();
+        return () => {
+            unsubscribe();
+            if (rafId !== null) {
+                cancelAnimationFrame(rafId);
+            }
+        };
     }, []);
 
     return (

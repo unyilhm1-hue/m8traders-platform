@@ -501,30 +501,30 @@ class SimulationEngine {
         // Update aggregated candle
         this.updateAggregatedCandle(price);
 
-        // ✅ FIX: TICK-BASED updates instead of time-based (syncs with any speed)
-        const now = Date.now();
-        const timeSinceLastTick = now - this.lastMessageTime;
+        // ✅ FIX: Sync candle updates with tick tempo (speed-independent)
         const isFirstTick = this.currentTickIndex === 0;
         const isLastTick = this.currentTickIndex >= this.numTicks - 1;
 
-        // Send tick message if enough time passed or critical moment
+        // TICK throttling (for orderbook/tape - keep 60 FPS limit)
+        const now = Date.now();
+        const timeSinceLastTick = now - this.lastMessageTime;
         const shouldSendTick =
             timeSinceLastTick >= this.MESSAGE_THROTTLE_MS ||
             isFirstTick ||
             isLastTick;
 
-        // ✅ KEY FIX: Update candle every N ticks (not time-based!)
-        // This stays consistent regardless of playback speed
-        const TICKS_PER_CANDLE_UPDATE = 2; // Update every 2 ticks = ~10 updates per candle
-        const shouldSendCandleUpdate =
-            this.currentTickIndex % TICKS_PER_CANDLE_UPDATE === 0 ||
-            isFirstTick || // Always send on open
-            isLastTick;    // Always send on close
-
         if (shouldSendTick) {
             postMessage({ type: 'TICK', data: tick });
             this.lastMessageTime = now;
         }
+
+        // ✅ CANDLE UPDATE: Tick-based (no time throttle!)
+        // Adaptive frequency: higher speed = more frequent updates
+        const TICKS_PER_CANDLE_UPDATE = this.playbackSpeed > 1 ? 1 : 2;
+        const shouldSendCandleUpdate =
+            this.currentTickIndex % TICKS_PER_CANDLE_UPDATE === 0 ||
+            isFirstTick || // Always send on open
+            isLastTick;    // Always send on close
 
         // Send candle updates based on tick count (speed-independent!)
         if (shouldSendCandleUpdate && this.currentAggregatedCandle) {
