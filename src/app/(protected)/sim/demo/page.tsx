@@ -31,60 +31,93 @@ export default function SimDemoPage() {
     // ✅ Subscribe to real-time price from simulation store
     const currentPrice = useCurrentPrice();
 
-    // 🚀 AUTO-LOAD DATA ON PAGE MOUNT
+    // 🚀 AUTO-LOAD DATA ON PAGE MOUNT WITH RANDOM ENTRY POINT
     useEffect(() => {
-        const autoLoadSimulation = async () => {
+        const initSimulation = async () => {
             try {
-                console.log('🚀 [SimDemoPage] Auto-loading simulation data...');
-
-                // Fetch data from API
+                console.log('� [SimDemoPage] Fetching simulation data...');
                 const response = await fetch('/api/simulation/start');
                 const result = await response.json();
 
-                if (!result.success) {
-                    throw new Error(result.error || 'Failed to load data');
+                if (!result.success || !result.data) {
+                    throw new Error('Failed to fetch');
                 }
 
-                const { candles } = result.data;
-                console.log(`📦 [SimDemoPage] Loaded ${candles.length} candles from API`);
+                const { candles, ticker } = result.data; // Data mentah (30 hari)
+                console.log(`✅ [SimDemoPage] Loaded ${candles.length} candles for ${ticker}`);
 
-                // Use today's date for simulation
-                const today = new Date().toISOString().split('T')[0]; // 2026-01-15
-                console.log(`📅 [SimDemoPage] Auto-selecting date: ${today}`);
+                // --- LOGIKA RANDOM ENTRY POINT ---
 
-                // Split data using store action
+                // 1. Ekstrak Daftar Tanggal Unik yang Ada di JSON
+                const uniqueDates = Array.from(new Set(candles.map((c: any) =>
+                    new Date(c.t).toISOString().split('T')[0]
+                ))).sort();
+
+                console.log(`📅 [SimDemoPage] Total Available Days: ${uniqueDates.length} days`);
+                console.log(`   Date Range: ${uniqueDates[0]} to ${uniqueDates[uniqueDates.length - 1]}`);
+
+                // 2. Tentukan Buffer History (Misal: Wajib punya 5 hari ke belakang)
+                const MIN_HISTORY_DAYS = 5;
+
+                let randomTargetDate: string;
+
+                if (uniqueDates.length <= MIN_HISTORY_DAYS) {
+                    console.warn('⚠️ [SimDemoPage] Data too short for random entry, using middle date');
+                    // Fallback ke hari tengah
+                    randomTargetDate = uniqueDates[Math.floor(uniqueDates.length / 2)];
+                } else {
+                    // 3. Pilih Tanggal Acak (Mulai dari hari ke-6 sampai hari terakhir - 1)
+                    // Ini menjamin chart selalu punya history minimal 5 hari ke belakang
+                    const validStartIndex = MIN_HISTORY_DAYS;
+                    const maxIndex = uniqueDates.length - 2; // Sisakan 1 hari di depan buat jaga-jaga
+
+                    const randomIndex = Math.floor(Math.random() * (maxIndex - validStartIndex + 1)) + validStartIndex;
+                    randomTargetDate = uniqueDates[randomIndex];
+
+                    console.log(`🎲 [SimDemoPage] Random Start Date: ${randomTargetDate} (Day ${randomIndex + 1}/${uniqueDates.length})`);
+                }
+
+                // 4. Load ke Store menggunakan Tanggal Acak tersebut
+                // Store otomatis akan menjadikan semua data SEBELUM tanggal ini sebagai History
                 const loadSimulationDay = useSimulationStore.getState().loadSimulationDay;
-                const { historyCount, simCount, error } = loadSimulationDay(today, candles);
+                const storeResult = loadSimulationDay(randomTargetDate, candles);
 
-                if (error || simCount === 0) {
-                    console.warn(`⚠️ [SimDemoPage] No simulation data for ${today}, simCount=${simCount}`);
+                if (storeResult.error || storeResult.simCount === 0) {
+                    console.warn(`⚠️ [SimDemoPage] No simulation data for ${randomTargetDate}, simCount=${storeResult.simCount}`);
                     console.log('💡 [SimDemoPage] Chart will show history only, Play button will be disabled');
                     return;
                 }
 
                 console.log(`✅ [SimDemoPage] Data split complete:`);
-                console.log(`   - History: ${historyCount} candles (already in store)`);
-                console.log(`   - Simulation: ${simCount} candles (ready for worker)`);
+                console.log(`   - History: ${storeResult.historyCount} candles (chart context)`);
+                console.log(`   - Simulation: ${storeResult.simCount} candles (for playback)`);
 
-                // Get simulation candles from store
+                // 5. Load ke Worker (Hanya data market hours yang sudah difilter Store)
                 const simulationCandles = useSimulationStore.getState().simulationCandles;
 
-                // Send to worker via engine reload (which triggers INIT_DATA)
+                // ✅ Send to worker via engine.initWithData
                 if (engine && simulationCandles.length > 0) {
                     console.log(`📨 [SimDemoPage] Sending ${simulationCandles.length} candles to worker...`);
-                    // We'll use engine.reload() which will call the worker's INIT_DATA
-                    // But we need to modify it to use our simulation data instead of fetching again
-                    // For now, let's directly post to worker if we have access
-                    // TODO: Better integration - for now data is ready in store
+                    engine.initWithData(simulationCandles);
+
+                    // Auto-play to start tick generation for orderbook
+                    setTimeout(() => {
+                        console.log('▶️ [SimDemoPage] Auto-starting playback...');
+                        engine.play(1); // Start at 1x speed
+                    }, 500); // Small delay to ensure worker processed INIT_DATA
+                } else if (!engine) {
+                    console.warn('⚠️ [SimDemoPage] Engine not ready yet');
+                } else {
+                    console.warn('⚠️ [SimDemoPage] No simulation candles to send');
                 }
 
-            } catch (error) {
-                console.error('❌ [SimDemoPage] Auto-load failed:', error);
+            } catch (err) {
+                console.error('❌ [SimDemoPage] Simulation Init Error:', err);
             }
         };
 
-        autoLoadSimulation();
-    }, []); // Run once on mount
+        initSimulation();
+    }, [engine]); // Run once on mount (engine dependency for safety)
 
     // Handle price updates for order filling
     useEffect(() => {

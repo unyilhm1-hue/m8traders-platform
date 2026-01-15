@@ -275,137 +275,77 @@ export const useSimulationStore = create<SimulationState>()(
             });
         },
 
-        loadSimulationDay(date, allCandles) {
-            return set((state) => {
-                console.log(`[SimulationStore] Loading simulation for date: ${date}`);
-                console.log(`[SimulationStore] Total candles available: ${allCandles.length}`);
+        loadSimulationDay: (date, allCandles) => {
+            console.log(`[SimulationStore] Loading simulation for date: ${date}`);
 
-                // Parse selected date
-                const selectedDate = new Date(date);
+            // --- 1. LOGIKA HITUNGAN (Di luar 'set' agar bisa di-return) ---
+            const selectedDate = new Date(date);
 
-                // Check if weekend
-                const dayOfWeek = selectedDate.getDay();
-                if (dayOfWeek === 0 || dayOfWeek === 6) {
-                    console.warn(`[SimulationStore] ⚠️ Warning: ${date} is a weekend!`);
-                    // Continue anyway - user might have weekend data
+            // Market hours (WIB adjustment might be needed, but assuming local 09:00-16:00)
+            const marketOpen = new Date(selectedDate);
+            marketOpen.setHours(9, 0, 0, 0);
+            const marketOpenTimestamp = Math.floor(marketOpen.getTime() / 1000);
+
+            const marketClose = new Date(selectedDate);
+            marketClose.setHours(16, 0, 0, 0);
+            const marketCloseTimestamp = Math.floor(marketClose.getTime() / 1000);
+
+            console.log(`[SimulationStore] Market hours: ${marketOpenTimestamp} (09:00) to ${marketCloseTimestamp} (16:00)`);
+
+            // Filter Arrays
+            const historyContext: Candle[] = [];
+            const simulationQueue: Candle[] = [];
+
+            allCandles.forEach((candle) => {
+                // Normalisasi timestamp (ms -> s)
+                const candleTime = candle.t > 10000000000 ? Math.floor(candle.t / 1000) : candle.t;
+
+                if (candleTime < marketOpenTimestamp) {
+                    historyContext.push(candle);
+                } else if (candleTime >= marketOpenTimestamp && candleTime <= marketCloseTimestamp) {
+                    simulationQueue.push(candle);
                 }
+            });
 
-                // Market hours: 09:00 AM - 04:00 PM
-                const marketOpen = new Date(selectedDate);
-                marketOpen.setHours(9, 0, 0, 0);
-                const marketOpenTimestamp = Math.floor(marketOpen.getTime() / 1000);
+            console.log(`[SimulationStore] Split complete:`);
+            console.log(`  - History Context: ${historyContext.length} candles`);
+            console.log(`  - Simulation Queue: ${simulationQueue.length} candles`);
 
-                const marketClose = new Date(selectedDate);
-                marketClose.setHours(16, 0, 0, 0);
-                const marketCloseTimestamp = Math.floor(marketClose.getTime() / 1000);
+            // Validasi Data Kosong
+            if (simulationQueue.length === 0) {
+                console.error(`[SimulationStore] ❌ No data found for ${date}`);
+                // Tetap return object error, jangan throw exception biar UI gak crash
+                return { historyCount: historyContext.length, simCount: 0, error: `No data for ${date}` };
+            }
 
-                console.log(`[SimulationStore] Market hours: ${marketOpenTimestamp} (09:00) to ${marketCloseTimestamp} (16:00)`);
-
-                // Split data into History Context and Simulation Queue
-                const historyContext: Candle[] = [];
-                const simulationQueue: Candle[] = [];
-
-                allCandles.forEach((candle) => {
-                    const candleTime = candle.t > 10000000000
-                        ? Math.floor(candle.t / 1000)
-                        : candle.t;
-
-                    if (candleTime < marketOpenTimestamp) {
-                        // Before market open → History Context
-                        historyContext.push(candle);
-                    } else if (candleTime >= marketOpenTimestamp && candleTime <= marketCloseTimestamp) {
-                        // During market hours → Simulation Queue
-                        simulationQueue.push(candle);
-                    }
-                    // After market close → Discard
-                });
-
-                // Sort both arrays by time (ascending)
-                historyContext.sort((a, b) => {
-                    const aTime = a.t > 10000000000 ? a.t / 1000 : a.t;
-                    const bTime = b.t > 10000000000 ? b.t / 1000 : b.t;
-                    return aTime - bTime;
-                });
-
-                simulationQueue.sort((a, b) => {
-                    const aTime = a.t > 10000000000 ? a.t / 1000 : a.t;
-                    const bTime = b.t > 10000000000 ? b.t / 1000 : b.t;
-                    return aTime - bTime;
-                });
-
-                console.log(`[SimulationStore] Split complete:`);
-                console.log(`  - History Context: ${historyContext.length} candles`);
-                console.log(`  - Simulation Queue: ${simulationQueue.length} candles`);
-
-                // ✅ SAFETY CHECK: Empty simulation data
-                if (simulationQueue.length === 0) {
-                    console.error(`[SimulationStore] ❌ FATAL: No simulation data for ${date}!`);
-                    console.error(`  This could mean:`);
-                    console.error(`  - Weekend/Holiday (no market activity)`);
-                    console.error(`  - No data in market hours (09:00-16:00)`);
-                    console.error(`  - Wrong date format or timezone issue`);
-
-                    return {
-                        historyCount: historyContext.length,
-                        simCount: 0,
-                        error: 'No simulation data available for this date. Try a different date or check if market was open.'
-                    };
-                }
-
-                // Verify strict separation
-                if (historyContext.length > 0 && simulationQueue.length > 0) {
-                    const lastHistory = historyContext[historyContext.length - 1];
-                    const firstSim = simulationQueue[0];
-                    const lastHistTime = lastHistory.t > 10000000000 ? lastHistory.t / 1000 : lastHistory.t;
-                    const firstSimTime = firstSim.t > 10000000000 ? firstSim.t / 1000 : firstSim.t;
-
-                    console.log(`  - Validation: Last history=${lastHistTime}, First sim=${firstSimTime}`);
-                    if (lastHistTime >= firstSimTime) {
-                        console.error('❌ FATAL: History overlaps with simulation! This will cause chart errors.');
-                        return {
-                            historyCount: historyContext.length,
-                            simCount: simulationQueue.length,
-                            error: 'Data integrity error: timestamp overlap detected'
-                        };
-                    } else {
-                        console.log('✅ Validation passed: History < Simulation');
-                    }
-                }
-
-                // Update state
+            // --- 2. UPDATE STATE (Di dalam 'set') ---
+            set((state) => {
                 state.selectedDate = date;
                 state.simulationCandles = simulationQueue;
 
-                // Convert history to ChartCandle format
-                const converted: ChartCandle[] = [];
-                historyContext.forEach((c) => {
-                    const timeInSeconds = c.t > 10000000000
-                        ? Math.floor(c.t / 1000)
-                        : c.t;
+                // Convert History ke Format Chart
+                const convertedHistory: ChartCandle[] = historyContext.map(c => ({
+                    time: c.t > 10000000000 ? Math.floor(c.t / 1000) : c.t,
+                    open: c.o,
+                    high: c.h,
+                    low: c.l,
+                    close: c.c
+                })).sort((a, b) => a.time - b.time); // Wajib sort!
 
-                    converted.push({
-                        time: timeInSeconds,
-                        open: c.o,
-                        high: c.h,
-                        low: c.l,
-                        close: c.c,
-                    });
-                });
-
-                state.candleHistory = converted;
-
-                console.log(`[SimulationStore] ✅ Ready for simulation!`);
-                console.log(`  - Selected Date: ${date}`);
-                console.log(`  - Full Day: 00:00 - 23:59`);
-                console.log(`  - Simulation Candles: ${simulationQueue.length}`);
-
-                // Return counts for caller confirmation
-                return {
-                    historyCount: historyContext.length,
-                    simCount: simulationQueue.length,
-                    error: null
-                };
+                state.candleHistory = convertedHistory;
             });
+
+            console.log(`[SimulationStore] ✅ Ready for simulation!`);
+            console.log(`  - Selected Date: ${date}`);
+            console.log(`  - History: ${historyContext.length} candles`);
+            console.log(`  - Simulation: ${simulationQueue.length} candles`);
+
+            // --- 3. RETURN HASIL KE KOMPONEN ---
+            return {
+                historyCount: historyContext.length,
+                simCount: simulationQueue.length,
+                error: null
+            };
         },
 
         reset() {

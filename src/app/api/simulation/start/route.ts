@@ -50,14 +50,50 @@ export async function GET() {
         const candles: Candle[] = JSON.parse(fileContent);
 
         // Extract metadata from filename
-        // Format: TICKER_YYYY-MM-DD.json
-        const match = randomFile.match(/^(.+)_(\d{4}-\d{2}-\d{2})\.json$/);
-        const ticker = match ? match[1] : 'UNKNOWN';
-        const date = match ? match[2] : 'UNKNOWN';
+        // Format: TICKER_YYYY-MM-DD.json (single day) OR TICKER_full_30days.json (multi-day)
+        let ticker: string;
+        let date: string;
+
+        const singleDayMatch = randomFile.match(/^(.+)_(\d{4}-\d{2}-\d{2})\.json$/);
+        if (singleDayMatch) {
+            // Single day file: BBRI_2025-12-18.json
+            ticker = singleDayMatch[1];
+            date = singleDayMatch[2];
+        } else {
+            // Multi-day file: BBRI_full_30days.json
+            // Extract ticker and use LAST candle's date (so there's history before it)
+            const multiDayMatch = randomFile.match(/^(.+?)_.*\.json$/);
+            ticker = multiDayMatch ? multiDayMatch[1] : 'UNKNOWN';
+
+            // Extract date from LAST candle's timestamp (for better history/sim split)
+            if (candles.length > 0 && candles[candles.length - 1].time) {
+                const lastCandleDate = new Date(candles[candles.length - 1].time);
+                date = lastCandleDate.toISOString().split('T')[0];
+            } else {
+                date = 'UNKNOWN';
+            }
+        }
 
         // Convert time strings to timestamps (ms) for compatibility
         const candlesWithTimestamp = candles.map((candle, index) => {
-            const timestamp = new Date(candle.time).getTime();
+            let timestamp: number;
+
+            // Parse timestamp dengan timezone handling
+            // Format JSON: "2025-12-18 02:00:00" (timezone-less)
+            // Kita perlu append timezone untuk parsing yang reliable
+            if (typeof candle.time === 'string') {
+                // Append WIB timezone (+07:00) jika belum ada
+                const timeStr = candle.time.includes('+') || candle.time.includes('Z')
+                    ? candle.time
+                    : candle.time + '+07:00';
+
+                timestamp = new Date(timeStr).getTime();
+            } else if (typeof candle.time === 'number') {
+                // Jika sudah number, normalize ke milliseconds
+                timestamp = candle.time < 10000000000 ? candle.time * 1000 : candle.time;
+            } else {
+                timestamp = 0;
+            }
 
             // Validate timestamp
             if (isNaN(timestamp) || timestamp === 0) {

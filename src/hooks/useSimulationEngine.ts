@@ -212,6 +212,19 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
         }
     }, [loadData]);
 
+    // Initialize worker with pre-loaded data (for SimDemoPage auto-load)
+    const initWithData = useCallback((candles: any[]) => {
+        if (workerRef.current) {
+            console.log(`[useSimulationEngine] Initializing worker with ${candles.length} candles`);
+            workerRef.current.postMessage({
+                type: 'INIT_DATA',
+                candles,
+            });
+        } else {
+            console.warn('[useSimulationEngine] Worker not ready yet, cannot init with data');
+        }
+    }, []);
+
     return {
         play,
         pause,
@@ -219,6 +232,7 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
         setSpeed,
         seek,
         reload,
+        initWithData, // ✅ New method for external data initialization
         isReady: isInitialized.current,
     };
 }

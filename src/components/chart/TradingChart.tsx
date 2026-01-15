@@ -42,6 +42,9 @@ export function TradingChart({ onPriceChange, className = '' }: TradingChartProp
     const vwapSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
     const rsiSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
 
+    // Chart ready state (fix race condition)
+    const [chartReady, setChartReady] = useState(false);
+
     // Legend state
     const [legendData, setLegendData] = useState<OHLCData>({
         open: 0,
@@ -204,6 +207,10 @@ export function TradingChart({ onPriceChange, className = '' }: TradingChartProp
             });
         }
 
+        // Mark chart as ready after all series are created
+        setChartReady(true);
+        console.log('[TradingChart] Chart initialization complete, ready to load data');
+
         // Cleanup
         return () => {
             if (mainChartRef.current) mainChartRef.current.remove();
@@ -240,13 +247,22 @@ export function TradingChart({ onPriceChange, className = '' }: TradingChartProp
     }, []);
 
     // Load historical data from store (IMPERATIVE - no React re-render)
+    // Now depends on chartReady to prevent race condition
     useEffect(() => {
-        if (!candleHistory || !candleSeriesRef.current) return;
+        if (!chartReady || !candleHistory || !candleSeriesRef.current) {
+            if (candleHistory && !chartReady) {
+                console.log('[TradingChart] ⏳ History ready, waiting for chart initialization...');
+            }
+            return;
+        }
 
         // --- STEP 1: FLUSH DATA LAMA (PENTING!) ---
-        // Ini akan menghapus error "last time=[object Object]" yang nyangkut
+        // WAJIB flush dulu sebelum load data baru untuk mencegah "Cannot update oldest data"
+        candleSeriesRef.current.setData([]); // 🧹 FLUSH!
+
+        // Jika history kosong, sudah bersih, return
         if (candleHistory.length === 0) {
-            candleSeriesRef.current.setData([]);
+            console.log('[TradingChart] 🧹 Chart flushed (no new data)');
             return;
         }
 
@@ -273,11 +289,10 @@ export function TradingChart({ onPriceChange, className = '' }: TradingChartProp
         candleData.sort((a, b) => (a.time as number) - (b.time as number));
 
         try {
-            // Reset dulu baru isi (Double Safety)
-            candleSeriesRef.current.setData([]);
+            // Load data (already flushed above)
             candleSeriesRef.current.setData(candleData);
 
-            console.log(`[TradingChart] ✅ History loaded cleanly: ${candleData.length} candles`);
+            console.log(`[TradingChart] ✅ History cleaned & loaded: ${candleData.length} candles`);
             if (candleData.length > 0) {
                 console.log(`[TradingChart]   First: ${candleData[0].time}, Last: ${candleData[candleData.length - 1].time}`);
             }
@@ -287,7 +302,7 @@ export function TradingChart({ onPriceChange, className = '' }: TradingChartProp
         }
 
         // TODO: Calculate and set Volume, VWAP, RSI from worker messages
-    }, [candleHistory]);
+    }, [candleHistory, chartReady]); // ✅ Now re-runs when chart becomes ready
 
     // Update current live candle (IMPERATIVE - 60 FPS performance)
     useEffect(() => {
@@ -381,6 +396,49 @@ export function TradingChart({ onPriceChange, className = '' }: TradingChartProp
             // Note: Lightweight Charts doesn't have unsubscribe, handled by chart.remove()
         };
     }, []);
+
+    // Subscribe to real-time candle updates
+    useEffect(() => {
+        // Safety check
+        if (!currentCandle || !candleSeriesRef.current) return;
+
+        try {
+            // --- STEP 1: SANITASI WAKTU (PENTING!) ---
+            // Kita pakai logika yang sama dengan history: Paksa jadi DETIK
+            let time = currentCandle.time;
+
+            // Jika formatnya Object/Date, ambil timestamp
+            if (typeof time === 'object' && time !== null) {
+                // @ts-ignore
+                time = new Date(time).getTime() / 1000;
+            }
+            // Jika formatnya String ISO
+            else if (typeof time === 'string') {
+                time = new Date(time).getTime() / 1000;
+            }
+            // Jika formatnya Angka (Millisecond) -> Convert ke Seconds
+            // Angka 10.000.000.000 adalah batas aman (Tahun 2286). 
+            // Jika lebih besar, berarti itu Milidetik, harus dibagi 1000.
+            else if (typeof time === 'number' && time > 10000000000) {
+                time = Math.floor(time / 1000);
+            }
+
+            // Pastikan time valid number
+            if (isNaN(time as number)) return;
+
+            // --- STEP 2: UPDATE CHART ---
+            candleSeriesRef.current.update({
+                time: time as Time, // Time yang sudah bersih (Seconds)
+                open: currentCandle.open,
+                high: currentCandle.high,
+                low: currentCandle.low,
+                close: currentCandle.close,
+            });
+
+        } catch (err) {
+            console.error('[TradingChart] Update error:', err);
+        }
+    }, [currentCandle]);
 
     return (
         <div ref={chartContainerRef} className={`trading-chart-container ${className}`}>

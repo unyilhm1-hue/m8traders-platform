@@ -336,7 +336,11 @@ class SimulationEngine {
             let timestamp: number;
 
             if (typeof c.t === 'number') {
-                timestamp = c.t;
+                // --- PERBAIKAN DI SINI ---
+                // Cek apakah angka ini Detik atau Ms?
+                // Angka 10.000.000.000 (10 Miliar) adalah batas aman tahun 2286.
+                // Jika < 10 Miliar, berarti pasti Detik -> Kali 1000 biar jadi MS.
+                timestamp = c.t < 10000000000 ? c.t * 1000 : c.t;
             } else if (c.t instanceof Date) {
                 timestamp = c.t.getTime();
             } else if (typeof c.t === 'string') {
@@ -349,7 +353,7 @@ class SimulationEngine {
 
             return {
                 ...c,
-                t: timestamp // Memaksa jadi angka timestamp (ms)
+                t: timestamp // SEKARANG PASTI MILLISECONDS
             };
         });
 
