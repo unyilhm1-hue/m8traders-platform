@@ -23,7 +23,7 @@ function SimDemoPageContent() {
     const { balance, checkAndFillOrders } = useTradingStore();
 
     // ✅ Get shared engine from context (no duplicate worker!)
-    const { engine } = useSimulationEngineContext();
+    const { engine, isReady } = useSimulationEngineContext();
 
     // ✅ Track initialization to prevent loop
     const hasInitialized = useRef(false);
@@ -128,11 +128,17 @@ function SimDemoPageContent() {
         };
 
         // ✅ FIX: Run only once, prevent loop
-        if (hasInitialized.current || !engine) return;
+        if (hasInitialized.current) return;
 
+        if (!engine || !isReady) {
+            console.log('[SimDemoPage] Waiting for worker...');
+            return;
+        }
+
+        console.log('[SimDemoPage] Worker ready, starting initialization...');
         initSimulation();
         hasInitialized.current = true;
-    }, []); // Empty deps - run once (engine accessed via closure)
+    }, [isReady]); // Depend on isReady to trigger when worker becomes available
 
     // ✅ FIX: Event-driven auto-play (no race condition)
     // Trigger play ONLY after DATA_READY confirmed

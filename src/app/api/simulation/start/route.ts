@@ -29,18 +29,44 @@ export async function GET() {
         // Ambil ticker dari nama file
         const ticker = randomFile.split('_')[0] || 'UNKNOWN';
 
-        // --- DATA PROCESSING YANG BENAR ---
+        // ✅ Extract date from filename (for HH:MM-only format support)
+        // Format: "TICKER_YYYY-MM-DD.json" or "TICKER_full_30days.json"
+        const filenameParts = randomFile.replace('.json', '').split('_');
+        const dateFromFilename = filenameParts.length >= 2 && filenameParts[1].match(/^\d{4}-\d{2}-\d{2}$/)
+            ? filenameParts[1]
+            : null;
+
+        // --- DATA PROCESSING WITH FORMAT DETECTION ---
         const candlesWithTimestamp = rawData.map((candle: any, index: number) => {
-            // FIX TIMEZONE DI SINI:
-            // Data JSON "02:00" adalah UTC. Tambahkan 'Z' agar dibaca sebagai UTC.
-            // Ganti spasi dengan 'T' agar format ISO valid (YYYY-MM-DDTHH:mm:ssZ)
-            const timeString = candle.time.replace(' ', 'T') + 'Z';
+            let timestamp: number;
 
-            const timestamp = new Date(timeString).getTime();
+            // ✅ Try to detect format and parse accordingly
+            if (candle.time.includes(' ') || candle.time.includes('T')) {
+                // Format 1: Full datetime "2025-12-18 02:00:00" or "2025-12-18T02:00:00"
+                const timeString = candle.time.replace(' ', 'T') + (candle.time.includes('Z') ? '' : 'Z');
+                timestamp = new Date(timeString).getTime();
+            } else if (candle.time.match(/^\d{2}:\d{2}(:\d{2})?$/)) {
+                // Format 2: Time-only "09:00" or "09:00:00"
+                if (dateFromFilename) {
+                    // Combine filename date with candle time
+                    const timePart = candle.time.length === 5 ? `${candle.time}:00` : candle.time;
+                    const fullDatetime = `${dateFromFilename}T${timePart}Z`;
+                    timestamp = new Date(fullDatetime).getTime();
+                } else {
+                    // No date in filename - cannot parse reliably
+                    console.warn(`[API] Time-only format "${candle.time}" but no date in filename "${randomFile}"`);
+                    timestamp = NaN;
+                }
+            } else {
+                // Unknown format
+                console.warn(`[API] Unknown time format: "${candle.time}"`);
+                timestamp = NaN;
+            }
 
-            // Validasi Timestamp
+            // Validation
             if (isNaN(timestamp)) {
-                // Fallback jika format error
+                // Fallback: use current time + offset (last resort)
+                console.warn(`[API] Using fallback timestamp for candle ${index}: "${candle.time}"`);
                 return {
                     t: Date.now() + (index * 60000),
                     o: candle.open,
@@ -52,7 +78,7 @@ export async function GET() {
             }
 
             return {
-                t: timestamp, // Ini sekarang adalah Timestamp UTC yang BENAR
+                t: timestamp, // ✅ Now correct for both formats!
                 o: candle.open,
                 h: candle.high,
                 l: candle.low,

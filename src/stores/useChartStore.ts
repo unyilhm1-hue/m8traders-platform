@@ -130,14 +130,19 @@ const initialState = {
 function findSecondDayIndex(candles: Candle[]): number {
     if (candles.length === 0) return 0;
 
-    // Get first candle's date (YYYY-MM-DD)
-    const firstDate = new Date(candles[0].t).toISOString().split('T')[0];
+    // ✅ Get first candle's date in WIB (not UTC!)
+    const firstDate = new Date(candles[0].t).toLocaleDateString('en-CA', {
+        timeZone: 'Asia/Jakarta'
+    }); // "YYYY-MM-DD" in WIB
 
-    // Find first candle with different date
+    // Find first candle with different date (using WIB timezone)
     for (let i = 1; i < candles.length; i++) {
-        const currentDate = new Date(candles[i].t).toISOString().split('T')[0];
+        const currentDate = new Date(candles[i].t).toLocaleDateString('en-CA', {
+            timeZone: 'Asia/Jakarta'
+        });
+
         if (currentDate !== firstDate) {
-            console.log(`[ChartStore] Starting replay from day 2 (index ${i}, date ${currentDate})`);
+            console.log(`[ChartStore] Starting replay from day 2 (index ${i}, date ${currentDate} WIB)`);
             return i;
         }
     }
@@ -146,8 +151,8 @@ function findSecondDayIndex(candles: Candle[]): number {
     // For single-day intraday data, start from 20% to show context
     const contextStartIndex = Math.floor(candles.length * 0.2);
     if (contextStartIndex > 0) {
-        const startDate = new Date(candles[contextStartIndex].t).toISOString();
-        console.log(`[ChartStore] Single day intraday data, starting from 20% (index ${contextStartIndex}, time ${startDate})`);
+        const startTime = new Date(candles[contextStartIndex].t).toISOString();
+        console.log(`[ChartStore] Single day intraday data, starting from 20% (index ${contextStartIndex}, time ${startTime})`);
         return contextStartIndex;
     }
 

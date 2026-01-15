@@ -120,11 +120,17 @@ export const TradingChart = memo(function TradingChart({ className = '' }: Tradi
             // Bersihkan & Set Data Baru
             candleSeriesRef.current.setData(candleData);
 
-            // Zoom Fit hanya saat load awal
-            mainChartRef.current.timeScale().fitContent();
+            // ✅ FIX: Auto-zoom to show last ~100 candles (not all 3000+!)
+            // This ensures simulation candles are visible at readable zoom level
+            const barCount = Math.min(100, candleHistory.length);
+            mainChartRef.current.timeScale().setVisibleLogicalRange({
+                from: candleHistory.length - barCount,
+                to: candleHistory.length - 1
+            });
 
             // Tandai sudah dimuat
             historyLoadedRef.current = lastCandleTime as number;
+            console.log(`[Chart] ✅ History loaded, showing last ${barCount} candles`);
 
         } catch (error) {
             console.error('[Chart] History Load Error:', error);

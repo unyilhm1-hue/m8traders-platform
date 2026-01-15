@@ -3,7 +3,7 @@
  * Initializes Web Worker and connects it to Simulation Store
  */
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { useSimulationStore } from '@/stores/useSimulationStore';
 import type { TickData } from './useSimulationWorker';
 
@@ -22,6 +22,8 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
 
     const workerRef = useRef<Worker | null>(null);
     const isInitialized = useRef(false);
+    // ✅ Reactive ready state
+    const [isReady, setIsReady] = useState(false);
 
     // Get store actions
     const pushTick = useSimulationStore((s) => s.pushTick);
@@ -52,6 +54,8 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
                 switch (type) {
                     case 'READY':
                         console.log('[useSimulationEngine] Worker ready');
+                        isInitialized.current = true;
+                        setIsReady(true); // ✅ Trigger context update
 
                         // Auto-load data if enabled
                         if (autoLoad) {
@@ -228,6 +232,6 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
         seek,
         reload,
         initWithData, // ✅ New method for external data initialization
-        isReady: isInitialized.current,
+        isReady, // ✅ Reactive state
     };
 }

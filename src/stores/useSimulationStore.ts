@@ -346,6 +346,11 @@ export const useSimulationStore = create<SimulationState>()(
                         timeZone: 'Asia/Jakarta'
                     }));
 
+                    // 🐛 DEBUG: Log filtering details
+                    if (simulationQueue.length < 10) {
+                        console.log(`[Store] Candle ${simulationQueue.length}: ${candleDateObj.toISOString()} -> WIB Hour: ${candleHourWIB}, Match: ${candleHourWIB >= marketOpenHour && candleHourWIB <= marketCloseHour}`);
+                    }
+
                     // Masukkan ke SIMULASI (Queue)
                     // Opsional: Filter jam 09:00 - 16:00 biar rapi
                     if (candleHourWIB >= marketOpenHour && candleHourWIB <= marketCloseHour) {
@@ -353,9 +358,22 @@ export const useSimulationStore = create<SimulationState>()(
                             ...c,
                             t: tsMs // Simpan dalam MS untuk Worker
                         });
+                    } else if (simulationQueue.length < 10) {
+                        console.log(`[Store] ❌ Rejected (hour ${candleHourWIB} outside 9-16)`);
                     }
                 }
             });
+
+            // 🐛 DEBUG: Show filtering summary
+            console.log(`[Store] 📊 Filtering Results for ${dateStr}:`);
+            console.log(`  - Total candles processed: ${allCandles.length}`);
+            console.log(`  - History (before ${dateStr}): ${historyContext.length}`);
+            console.log(`  - Simulation (on ${dateStr}): ${simulationQueue.length}`);
+            if (simulationQueue.length > 0) {
+                const firstSim = new Date(simulationQueue[0].t);
+                const lastSim = new Date(simulationQueue[simulationQueue.length - 1].t);
+                console.log(`  - Sim range: ${firstSim.toISOString()} -> ${lastSim.toISOString()}`);
+            }
 
             // Validasi
             if (simulationQueue.length === 0) {
