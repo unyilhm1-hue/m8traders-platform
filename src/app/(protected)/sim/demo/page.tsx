@@ -4,7 +4,7 @@
  */
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { TradingChart } from '@/components/chart';
 import { DrawingSidebar } from '@/components/chart/DrawingSidebar';
 import { CompactToolbar } from '@/components/trading/CompactToolbar';
@@ -13,21 +13,20 @@ import { EnhancedOrderPanel } from '@/components/trading/EnhancedOrderPanel';
 import { MarketDataPanel } from '@/components/market/MarketDataPanel';
 import { PerformanceStats, TradeHistory } from '@/components/analytics';
 import { useTradingStore } from '@/stores';
-import { useSimulationEngine } from '@/hooks/useSimulationEngine';
+import { SimulationEngineProvider, useSimulationEngineContext } from '@/contexts/SimulationEngineContext';
 import { useCurrentPrice, useSimulationStore } from '@/stores/useSimulationStore';
 import { formatPrice, formatIDR } from '@/lib/format';
 
-export default function SimDemoPage() {
+function SimDemoPageContent() {
     const [activeTab, setActiveTab] = useState<'position' | 'pending' | 'trades'>('position');
     const [isWorkerDataReady, setIsWorkerDataReady] = useState(false);
     const { balance, checkAndFillOrders } = useTradingStore();
 
-    // ✅ Initialize simulation engine (manual control via DateSelector)
-    const engine = useSimulationEngine({
-        autoLoad: false,  // Manual load via auto-load logic below
-        autoPlay: false,  // Manual play via SimulationControls
-        playbackSpeed: 1,
-    });
+    // ✅ Get shared engine from context (no duplicate worker!)
+    const { engine } = useSimulationEngineContext();
+
+    // ✅ Track initialization to prevent loop
+    const hasInitialized = useRef(false);
 
     // ✅ Subscribe to real-time price from simulation store
     const currentPrice = useCurrentPrice();
@@ -128,8 +127,12 @@ export default function SimDemoPage() {
             }
         };
 
+        // ✅ FIX: Run only once, prevent loop
+        if (hasInitialized.current || !engine) return;
+
         initSimulation();
-    }, [engine]); // Run once on mount (engine dependency for safety)
+        hasInitialized.current = true;
+    }, []); // Empty deps - run once (engine accessed via closure)
 
     // ✅ FIX: Event-driven auto-play (no race condition)
     // Trigger play ONLY after DATA_READY confirmed
@@ -238,5 +241,14 @@ export default function SimDemoPage() {
                 <MarketDataPanel currentPrice={currentPrice} />
             </div>
         </div>
+    );
+}
+
+// Wrap with context provider to share single engine instance
+export default function SimDemoPage() {
+    return (
+        <SimulationEngineProvider>
+            <SimDemoPageContent />
+        </SimulationEngineProvider>
     );
 }

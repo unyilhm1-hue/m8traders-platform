@@ -6,7 +6,7 @@
 
 import { useState } from 'react';
 import { Calendar, Play, Pause } from 'lucide-react';
-import { useSimulationEngine } from '@/hooks/useSimulationEngine';
+import { useSimulationEngineContext } from '@/contexts/SimulationEngineContext';
 import { useSelectedDate } from '@/stores/useSimulationStore';
 import { DateSelectorModal } from '../simulation/DateSelectorModal';
 import { Select } from '../ui/Select';
@@ -17,11 +17,8 @@ export function SimulationControls() {
     const [speed, setSpeed] = useState(1);
     const selectedDate = useSelectedDate();
 
-    const engine = useSimulationEngine({
-        autoLoad: false, // Manual load via date selector
-        autoPlay: false,
-        playbackSpeed: speed,
-    });
+    // ✅ Get shared engine from context (no duplicate worker!)
+    const { engine } = useSimulationEngineContext();
 
     const speedOptions = [
         { label: '1x', value: '1' },

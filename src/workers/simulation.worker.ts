@@ -317,6 +317,10 @@ class SimulationEngine {
     private lastMessageTime: number = 0;
     private readonly MESSAGE_THROTTLE_MS: number = 16; // ~60 FPS
 
+    // ✅ CANDLE_UPDATE throttle (prevent UI flooding)
+    private lastCandleUpdateTime: number = 0;
+    private readonly CANDLE_UPDATE_THROTTLE_MS: number = 50; // 20 FPS max
+
     // Aggregated candle (for Lightweight Charts)
     private currentAggregatedCandle: {
         time: number;
@@ -518,20 +522,24 @@ class SimulationEngine {
             this.lastMessageTime = now;
         }
 
-        // ✅ CANDLE UPDATE: Tick-based (no time throttle!)
-        // Adaptive frequency: higher speed = more frequent updates
-        const TICKS_PER_CANDLE_UPDATE = this.playbackSpeed > 1 ? 1 : 2;
+        // ✅ CANDLE UPDATE: Tick-based + Time throttle (prevent flooding!)
+        // Combine adaptive frequency with time-based limit
+        const timeSinceCandleUpdate = now - this.lastCandleUpdateTime;
+        const TICKS_PER_UPDATE = this.playbackSpeed > 1 ? 1 : 2;
+
         const shouldSendCandleUpdate =
-            this.currentTickIndex % TICKS_PER_CANDLE_UPDATE === 0 ||
+            (this.currentTickIndex % TICKS_PER_UPDATE === 0 &&
+                timeSinceCandleUpdate >= this.CANDLE_UPDATE_THROTTLE_MS) || // Time guard
             isFirstTick || // Always send on open
             isLastTick;    // Always send on close
 
-        // Send candle updates based on tick count (speed-independent!)
+        // Send candle updates (max 20 Hz)
         if (shouldSendCandleUpdate && this.currentAggregatedCandle) {
             postMessage({
                 type: 'CANDLE_UPDATE',
                 candle: this.currentAggregatedCandle
             });
+            this.lastCandleUpdateTime = now; // Track last send time
         }
 
         // Advance tick
