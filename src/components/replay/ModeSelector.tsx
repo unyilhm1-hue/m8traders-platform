@@ -8,7 +8,7 @@ import { useChartStore } from '@/stores';
 import { REPLAY_MODE_LABELS, REPLAY_MODE_DESCRIPTIONS } from '@/lib/replay';
 import type { ReplayMode } from '@/types';
 
-const MODES: ReplayMode[] = ['live', '1y', 'scenario'];
+const MODES: ReplayMode[] = ['live', 'scenario'];
 
 export function ModeSelector() {
     const { replayMode, setReplayMode, loading } = useChartStore();

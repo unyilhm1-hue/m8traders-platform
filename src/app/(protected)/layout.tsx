@@ -24,6 +24,7 @@ export default async function ProtectedLayout({
     // }
 
     // Mock user for development (to prevent AuthButton errors)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mockUser = user || { email: 'dev@localhost', id: 'dev-user' } as any;
 
     return (

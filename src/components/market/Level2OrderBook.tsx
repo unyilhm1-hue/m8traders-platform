@@ -1,43 +1,22 @@
 /**
  * Level2OrderBook Component
  * Display bid/ask depth with volume visualization
+ * Connected to simulation store for real-time updates
  */
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useChartStore } from '@/stores';
-import { generateOrderbook, type OrderbookSnapshot } from '@/lib/market/orderbookGenerator';
-import { calculateATR } from '@/lib/market/calculateATR';
+import { useOrderbook } from '@/stores/useSimulationStore';
 import { formatPrice, formatPercent } from '@/lib/format';
 
 interface Level2OrderBookProps {
-    currentPrice?: number; // Optional, will use store if not provided
+    currentPrice?: number; // Optional, for compatibility
 }
 
 export function Level2OrderBook({ currentPrice: priceOverride }: Level2OrderBookProps) {
-    const { currentCandle, replayData, ticker } = useChartStore();
-    const [orderBook, setOrderBook] = useState<OrderbookSnapshot | null>(null);
+    // ✅ Subscribe to synthetic orderbook from simulation store (now properly memoized)
+    const { bids, asks } = useOrderbook();
 
-    useEffect(() => {
-        if (!currentCandle || replayData.length === 0) {
-            setOrderBook(null);
-            return;
-        }
-
-        // Calculate ATR from last 14 candles (or available candles)
-        const atr = calculateATR(replayData.slice(-14), 14);
-
-        // Generate orderbook from current candle
-        const snapshot = generateOrderbook(currentCandle, {
-            atr,
-            numLevels: 10,
-            baseSpreadTicks: 2.5,
-        });
-
-        setOrderBook(snapshot);
-    }, [currentCandle, replayData]);
-
-    if (!orderBook) {
+    if (!bids.length || !asks.length) {
         return (
             <div className="h-full flex flex-col bg-[var(--bg-secondary)]">
                 <div className="p-3 border-b border-[var(--bg-tertiary)]">
@@ -48,9 +27,17 @@ export function Level2OrderBook({ currentPrice: priceOverride }: Level2OrderBook
         );
     }
 
-    const maxBidQty = Math.max(...orderBook.bids.map((b) => b.quantity));
-    const maxAskQty = Math.max(...orderBook.asks.map((a) => a.quantity));
-    const maxQty = Math.max(maxBidQty, maxAskQty);
+    // Calculate max volume for visualization
+    const maxBidVolume = Math.max(...bids.map((b) => b.volume));
+    const maxAskVolume = Math.max(...asks.map((a) => a.volume));
+    const maxVolume = Math.max(maxBidVolume, maxAskVolume);
+
+    // Calculate spread
+    const bestBid = bids[0]?.price || 0;
+    const bestAsk = asks[0]?.price || 0;
+    const spread = bestAsk - bestBid;
+    const midPrice = (bestBid + bestAsk) / 2;
+    const spreadPercent = midPrice > 0 ? (spread / midPrice) * 100 : 0;
 
     return (
         <div className="h-full flex flex-col bg-[var(--bg-secondary)]">
@@ -60,25 +47,25 @@ export function Level2OrderBook({ currentPrice: priceOverride }: Level2OrderBook
                 <div className="mt-1 flex items-baseline gap-2 text-xs">
                     <span className="text-[var(--text-tertiary)]">Spread:</span>
                     <span className="text-[var(--text-primary)] font-mono">
-                        {formatPrice(orderBook.spread, ticker, { roundToTickSize: true })}
+                        Rp {spread.toFixed(0)}
                     </span>
                     <span className="text-[var(--text-tertiary)]">
-                        ({formatPercent(orderBook.spreadPercent / 100, 3)})
+                        ({spreadPercent.toFixed(3)}%)
                     </span>
                 </div>
             </div>
 
             {/* Order Book */}
             <div className="flex-1 overflow-y-auto">
-                {/* Asks (sell orders - descending) */}
+                {/* Asks (sell orders - reversed, highest first) */}
                 <div className="border-b border-[var(--bg-tertiary)] pb-2">
                     <div className="grid grid-cols-3 gap-2 px-3 py-1.5 text-xs font-semibold text-[var(--text-tertiary)] border-b border-[var(--bg-tertiary)]">
                         <div className="text-right">Price</div>
                         <div className="text-right">Size</div>
-                        <div className="text-right">Total</div>
+                        <div className="text-right">Orders</div>
                     </div>
-                    {orderBook.asks.slice().reverse().map((ask, idx) => {
-                        const percent = (ask.quantity / maxQty) * 100;
+                    {asks.slice().reverse().map((ask, idx) => {
+                        const percent = (ask.volume / maxVolume) * 100;
                         return (
                             <div
                                 key={`ask-${idx}`}
@@ -88,12 +75,14 @@ export function Level2OrderBook({ currentPrice: priceOverride }: Level2OrderBook
                                     className="absolute right-0 top-0 bottom-0 bg-red-500/10"
                                     style={{ width: `${percent}%` }}
                                 />
-                                <div className="relative text-right text-red-400">{formatPrice(ask.price, ticker, { roundToTickSize: true })}</div>
+                                <div className="relative text-right text-red-400">
+                                    {ask.price.toLocaleString('id-ID')}
+                                </div>
                                 <div className="relative text-right text-[var(--text-primary)]">
-                                    {ask.quantity.toLocaleString()}
+                                    {ask.volume.toLocaleString()}
                                 </div>
                                 <div className="relative text-right text-[var(--text-secondary)]">
-                                    {ask.orders}
+                                    {ask.count}
                                 </div>
                             </div>
                         );
@@ -103,17 +92,17 @@ export function Level2OrderBook({ currentPrice: priceOverride }: Level2OrderBook
                 {/* Spread Indicator */}
                 <div className="py-2 px-3 bg-[var(--bg-tertiary)] flex items-center justify-between">
                     <span className="text-xs font-semibold text-[var(--text-primary)]">
-                        Spread: {formatPrice(orderBook.spread, ticker, { roundToTickSize: true })}
+                        Spread: Rp {spread.toFixed(0)}
                     </span>
                     <span className="text-xs text-[var(--text-tertiary)]">
-                        Mid: {formatPrice(orderBook.midPrice, ticker, { roundToTickSize: true })}
+                        Mid: Rp {midPrice.toFixed(0)}
                     </span>
                 </div>
 
                 {/* Bids (buy orders - descending) */}
                 <div className="pt-2">
-                    {orderBook.bids.map((bid, idx) => {
-                        const percent = (bid.quantity / maxQty) * 100;
+                    {bids.map((bid, idx) => {
+                        const percent = (bid.volume / maxVolume) * 100;
                         return (
                             <div
                                 key={`bid-${idx}`}
@@ -123,12 +112,14 @@ export function Level2OrderBook({ currentPrice: priceOverride }: Level2OrderBook
                                     className="absolute right-0 top-0 bottom-0 bg-green-500/10"
                                     style={{ width: `${percent}%` }}
                                 />
-                                <div className="relative text-right text-green-400">{formatPrice(bid.price, ticker, { roundToTickSize: true })}</div>
+                                <div className="relative text-right text-green-400">
+                                    {bid.price.toLocaleString('id-ID')}
+                                </div>
                                 <div className="relative text-right text-[var(--text-primary)]">
-                                    {bid.quantity.toLocaleString()}
+                                    {bid.volume.toLocaleString()}
                                 </div>
                                 <div className="relative text-right text-[var(--text-secondary)]">
-                                    {bid.orders}
+                                    {bid.count}
                                 </div>
                             </div>
                         );

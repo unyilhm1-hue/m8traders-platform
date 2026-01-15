@@ -4,31 +4,18 @@
  */
 'use client';
 
-import { useChartStore } from '@/stores';
+import { SimulationControls } from '@/components/simulation/SimulationControls';
 import { AverageCalculator } from './AverageCalculator';
-import type { Timeframe, ReplayMode } from '@/types';
-import { JumpToControls, TimelineSlider, MarketTimeSelector, ModeSelector } from '@/components/replay';
 import { ScenarioSelector } from '@/components/replay/ScenarioSelector';
 import { Select } from '@/components/ui/Select';
 import { UI_ICONS } from '@/lib/chart/icons';
 import { Portal } from '@/components/ui/Portal';
 import { useRef, useState, useEffect } from 'react';
+import { useChartStore } from '@/stores';
 
 export function CompactToolbar() {
-    const {
-        ticker,
-        timeframe,
-        indicators,
-        replayMode,
-        isPlaying,
-        playbackSpeed,
-        setTicker,
-        setTimeframe,
-        toggleIndicator,
-        setReplayMode,
-        setPlaying,
-        setPlaybackSpeed,
-    } = useChartStore();
+    // Chart state (for ticker, timeframe, indicators only)
+    const { ticker, timeframe, indicators, setTicker, setTimeframe, toggleIndicator } = useChartStore();
 
     const indicatorRef = useRef<HTMLButtonElement>(null);
     const [isIndicatorOpen, setIsIndicatorOpen] = useState(false);
@@ -167,54 +154,14 @@ export function CompactToolbar() {
                 {/* Average Calculator */}
                 <AverageCalculator />
 
-                {/* Replay Controls - Always visible */}
-                <>
-                    {/* Play/Pause Button */}
-                    <button
-                        onClick={() => setPlaying(!isPlaying)}
-                        className={`
-                            w-8 h-8 flex items-center justify-center rounded-full transition-all
-                            ${isPlaying
-                                ? 'bg-[var(--accent-primary)] text-white glow-primary hover:bg-[var(--accent-primary)]/90'
-                                : 'bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
-                            }
-                        `}
-                        title={isPlaying ? 'Pause [Space]' : 'Play [Space]'}
-                    >
-                        {isPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
-                    </button>
+                {/* Simulation Controls */}
+                <SimulationControls />
 
-                    {/* Speed Selector */}
-                    <Select
-                        value={String(playbackSpeed)}
-                        onChange={(val) => setPlaybackSpeed(Number(val) as any)}
-                        options={speedOptions}
-                        className="w-[80px]"
-                    />
-
-                    {/* Mode Selector */}
-                    <ModeSelector />
-
-                    {/* Market Time Selector */}
-                    <MarketTimeSelector />
-
-                    {/* Separator */}
-                    <div className="w-px h-6 bg-[var(--bg-tertiary)]" />
-
-                    {/* Jump To Controls */}
-                    <JumpToControls />
-
-                    {/* Scenario Selector */}
-                    <ScenarioSelector />
-                </>
+                {/* Scenario Selector */}
+                <ScenarioSelector />
 
                 {/* Flexible Spacer */}
                 <div className="flex-1" />
-
-                {/* Timeline Slider */}
-                <div className="flex items-center gap-4 mr-4 w-[200px] xl:w-[300px]">
-                    <TimelineSlider />
-                </div>
             </div>
         </div>
     );

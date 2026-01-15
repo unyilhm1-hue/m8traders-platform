@@ -1,591 +1,410 @@
 /**
- * TradingChart Component
- * KLineChart wrapper with m8traders integration
+ * TradingChart Component - Lightweight Charts Edition
+ * Complete refactor using TradingView Lightweight Charts
  */
 'use client';
 
-import { useEffect, useRef, useState, useMemo } from 'react';
-import { init, dispose } from 'klinecharts';
-import { useChartStore } from '@/stores';
+import { useEffect, useRef, useState } from 'react';
 import {
-    getChartTheme,
-    toKLineData,
-    fetchStockData,
-    type KLineData,
-} from '@/lib/chart';
-import { INDICATOR_CONFIG } from '@/lib/chart/config';
-import { ReplayEngine } from '@/lib/replay';
-import type { Candle } from '@/types';
+    createChart,
+    ColorType,
+    CrosshairMode,
+    LineStyle,
+    type IChartApi,
+    type ISeriesApi,
+    type CandlestickData,
+    type Time,
+} from 'lightweight-charts';
+import { useCandleHistory, useCurrentCandle, type ChartCandle } from '@/stores/useSimulationStore';
 
 interface TradingChartProps {
-    data?: Candle[];
     onPriceChange?: (price: number) => void;
     className?: string;
 }
 
-export function TradingChart({ data, onPriceChange, className = '' }: TradingChartProps) {
-    const chartRef = useRef<HTMLDivElement>(null);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const chartInstance = useRef<any>(null);
+interface OHLCData {
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+}
 
-    const {
-        ticker,
-        timeframe,
-        indicators,
-        theme,
-        activeDrawingTool,
-        overlays,
-        replayMode,
-        replayData,
-        replayIndex,
-        isPlaying,
-        playbackSpeed,
-        setLoading,
-        setError,
-        setLastUpdate,
-        addOverlay,
-        setActiveDrawingTool,
-        setReplayData,
-        setReplayIndex,
-        setCurrentCandle,
-    } = useChartStore();
+export function TradingChart({ onPriceChange, className = '' }: TradingChartProps) {
+    // Refs
+    const chartContainerRef = useRef<HTMLDivElement>(null);
+    const mainChartRef = useRef<IChartApi | null>(null);
+    const volumeChartRef = useRef<IChartApi | null>(null);
+    const rsiChartRef = useRef<IChartApi | null>(null);
 
-    const [chartData, setChartData] = useState<KLineData[]>([]);
-    const replayEngineRef = useRef<ReplayEngine | null>(null);
-    const isReplayActive = replayMode !== 'live';
+    const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+    const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+    const vwapSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+    const rsiSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
 
-    // Fetch data when ticker, timeframe, or replay mode changes
+    // Legend state
+    const [legendData, setLegendData] = useState<OHLCData>({
+        open: 0,
+        high: 0,
+        low: 0,
+        close: 0,
+        volume: 0
+    });
+
+    // Mobile detection
+    const isTouchDevice = typeof window !== 'undefined' && 'ontouchstart' in window;
+
+    // Subscribe to store (NO React re-renders on updates)
+    const candleHistory = useCandleHistory();
+    const currentCandle = useCurrentCandle();
+
+    // Ref for throttling debug logs
+    const lastLogTimeRef = useRef<number>(0);
+
+    // Initialize charts
     useEffect(() => {
-        let isCancelled = false;
+        if (!chartContainerRef.current) return;
 
-        const loadData = async () => {
-            if (data && data.length > 0) {
-                // Use provided data
-                if (isReplayActive) {
-                    setReplayData(data);
-                } else {
-                    setChartData(toKLineData(data));
-                }
-                return;
-            }
+        const container = chartContainerRef.current;
 
-            // Fetch from data service
-            setLoading(true);
-            setError(null);
-
-            try {
-                const fetchedData = await fetchStockData(ticker, timeframe);
-
-                if (!isCancelled) {
-                    if (isReplayActive) {
-                        // In replay mode, store full data for replay
-                        setReplayData(fetchedData);
-                        console.log(`[TradingChart] Loaded ${fetchedData.length} candles for replay mode: ${replayMode}`);
-                    } else {
-                        // In live mode, display all data
-                        const klineData = toKLineData(fetchedData);
-                        setChartData(klineData);
-                    }
-                    setLastUpdate(Date.now());
-                }
-            } catch (err) {
-                if (!isCancelled) {
-                    const errorMessage = err instanceof Error ? err.message : 'Failed to load data';
-                    setError(errorMessage);
-                    console.error('[TradingChart] Data load error:', err);
-                }
-            } finally {
-                if (!isCancelled) {
-                    setLoading(false);
-                }
-            }
+        // Theme colors (matching TradingView dark)
+        const chartOptions = {
+            layout: {
+                background: { type: ColorType.Solid, color: '#0a0a0f' },
+                textColor: '#d1d4dc',
+            },
+            grid: {
+                vertLines: { color: 'rgba(42, 46, 57, 0.5)' },
+                horzLines: { color: 'rgba(42, 46, 57, 0.5)' },
+            },
+            crosshair: {
+                mode: CrosshairMode.Normal,
+                vertLine: {
+                    color: '#758696',
+                    width: 1,
+                    style: LineStyle.Dashed,
+                },
+                horzLine: {
+                    color: '#758696',
+                    width: 1,
+                    style: LineStyle.Dashed,
+                },
+            },
+            timeScale: {
+                borderColor: '#2b2b43',
+                timeVisible: true,
+                secondsVisible: false,
+            },
+            rightPriceScale: {
+                borderColor: '#2b2b43',
+            },
         };
 
-        loadData();
+        // Main chart (candlesticks + VWAP overlay)
+        const mainDiv = container.querySelector('#main-chart') as HTMLDivElement;
+        if (mainDiv) {
+            const mainChart = createChart(mainDiv, {
+                ...chartOptions,
+                height: 400,
+            } as any); // Type compatibility with lightweight-charts
+            mainChartRef.current = mainChart;
 
-        return () => {
-            isCancelled = true;
-        };
-    }, [ticker, timeframe, replayMode, data, isReplayActive, setLoading, setError, setLastUpdate, setReplayData]);
+            // Candlestick series
+            const candleSeries = mainChart.addCandlestickSeries({
+                upColor: '#26a69a',
+                downColor: '#ef5350',
+                borderVisible: false,
+                wickUpColor: '#26a69a',
+                wickDownColor: '#ef5350',
+            });
+            candleSeriesRef.current = candleSeries;
 
-    // Initialize chart
-    useEffect(() => {
-        if (!chartRef.current || chartInstance.current) return;
+            // VWAP overlay (default enabled)
+            const vwapSeries = mainChart.addLineSeries({
+                color: '#2962FF',
+                lineWidth: 2,
+                title: 'VWAP',
+            });
+            vwapSeriesRef.current = vwapSeries;
 
-        // Get theme styles
-        const chartTheme = getChartTheme(theme);
+            // Crosshair move event for OHLC legend
+            mainChart.subscribeCrosshairMove((param) => {
+                if (!param.time || !param.seriesData.get(candleSeries)) {
+                    return;
+                }
 
-        // Initialize KLineChart
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const chart: any = init(chartRef.current, {
-            styles: chartTheme,
-        } as any);
+                const data = param.seriesData.get(candleSeries) as CandlestickData;
+                setLegendData({
+                    open: data.open,
+                    high: data.high,
+                    low: data.low,
+                    close: data.close,
+                    volume: 0 // Volume from volume pane if needed
+                });
+            });
+        }
 
-        if (chart) {
-            chartInstance.current = chart;
+        // Volume chart (separate pane, default enabled)
+        const volumeDiv = container.querySelector('#volume-chart') as HTMLDivElement;
+        if (volumeDiv) {
+            const volumeChart = createChart(volumeDiv, {
+                ...chartOptions,
+                height: 100,
+            } as any); // Type compatibility
+            volumeChartRef.current = volumeChart;
 
-            // Load data
-            if (chartData.length > 0) {
-                chart.applyNewData(chartData);
-                console.log('[TradingChart] Chart initialized with data');
-            }
+            const volumeSeries = volumeChart.addHistogramSeries({
+                color: '#26a69a',
+                priceFormat: {
+                    type: 'volume',
+                },
+            });
+            volumeSeriesRef.current = volumeSeries;
+        }
 
-            // Don't create volume pane automatically - let indicators handle it
+        // RSI chart (separate pane, default enabled)
+        const rsiDiv = container.querySelector('#rsi-chart') as HTMLDivElement;
+        if (rsiDiv) {
+            const rsiChart = createChart(rsiDiv, {
+                ...chartOptions,
+                height: 150,
+            } as any); // Type compatibility
+            rsiChartRef.current = rsiChart;
+
+            const rsiSeries = rsiChart.addLineSeries({
+                color: '#AB47BC',
+                lineWidth: 2,
+                title: 'RSI(14)',
+            });
+            rsiSeriesRef.current = rsiSeries;
+
+            // Add overbought/oversold lines (70/30)
+            const upperBand = rsiChart.addLineSeries({
+                color: 'rgba(239, 83, 80, 0.5)',
+                lineWidth: 1,
+                lineStyle: LineStyle.Dashed,
+                priceLineVisible: false,
+                lastValueVisible: false,
+            });
+
+            const lowerBand = rsiChart.addLineSeries({
+                color: 'rgba(38, 166, 154, 0.5)',
+                lineWidth: 1,
+                lineStyle: LineStyle.Dashed,
+                priceLineVisible: false,
+                lastValueVisible: false,
+            });
+
+            // Set RSI scale (0-100)
+            rsiChart.priceScale('right').applyOptions({
+                scaleMargins: {
+                    top: 0.1,
+                    bottom: 0.1,
+                },
+            });
         }
 
         // Cleanup
         return () => {
-            if (chartRef.current) {
-                dispose(chartRef.current);
-                chartInstance.current = null;
+            if (mainChartRef.current) mainChartRef.current.remove();
+            if (volumeChartRef.current) volumeChartRef.current.remove();
+            if (rsiChartRef.current) rsiChartRef.current.remove();
+        };
+    }, []);
+
+    // ResizeObserver for responsive charts
+    useEffect(() => {
+        if (!chartContainerRef.current) return;
+
+        const handleResize = () => {
+            const container = chartContainerRef.current;
+            if (!container) return;
+
+            const width = container.clientWidth;
+
+            if (mainChartRef.current) {
+                mainChartRef.current.applyOptions({ width });
+            }
+            if (volumeChartRef.current) {
+                volumeChartRef.current.applyOptions({ width });
+            }
+            if (rsiChartRef.current) {
+                rsiChartRef.current.applyOptions({ width });
             }
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [theme]);
 
-    // Update data when chartData changes
+        const resizeObserver = new ResizeObserver(handleResize);
+        resizeObserver.observe(chartContainerRef.current);
+
+        return () => resizeObserver.disconnect();
+    }, []);
+
+    // Load historical data from store (IMPERATIVE - no React re-render)
     useEffect(() => {
-        const chart = chartInstance.current;
-        if (!chart || chartData.length === 0) return;
+        if (!candleHistory || !candleSeriesRef.current) return;
 
-        // Debug logging
-        console.log('[TradingChart] Applying new data:', {
-            count: chartData.length,
-            first: chartData[0],
-            last: chartData[chartData.length - 1],
-        });
-
-        chart.applyNewData(chartData);
-    }, [chartData]);
-
-    // Initialize ReplayEngine when in replay mode
-    useEffect(() => {
-        console.log(`[TradingChart] Engine useEffect triggered - isReplayActive: ${isReplayActive}, replayData: ${replayData.length}, isPlaying: ${isPlaying}`);
-
-        if (!isReplayActive || replayData.length === 0) {
-            // Clean up engine if switching to live mode
-            if (replayEngineRef.current) {
-                console.log('[TradingChart] Destroying engine - switching to live mode');
-                replayEngineRef.current.destroy();
-                replayEngineRef.current = null;
-            }
+        // --- STEP 1: FLUSH DATA LAMA (PENTING!) ---
+        // Ini akan menghapus error "last time=[object Object]" yang nyangkut
+        if (candleHistory.length === 0) {
+            candleSeriesRef.current.setData([]);
             return;
         }
 
-        // Create new replay engine with tick-by-tick support
-        const engine = new ReplayEngine(replayData, {
-            timeframe,
-            speed: playbackSpeed,
-            numTicks: 20, // 20 ticks per candle for smooth animation
-            onTickUpdate: (tick) => {
-                // ✅ FIX: Update ONLY the last candle, don't re-render entire chart
-                const partialCandle = engine.getCurrentCandle();
-                const chart = chartInstance.current;
-
-                if (partialCandle && chart) {
-                    try {
-                        // Update store with current partial candle
-                        setCurrentCandle(partialCandle);
-
-                        // Convert to KLineData format
-                        const klinePartial = toKLineData([partialCandle])[0];
-
-                        // ✅ FIX: Ensure chart has initial data before updating
-                        // On first tick, use applyNewData to set initial visible data
-                        const visibleData = engine.getVisibleData();
-                        if (tick.tickIndex === 0 && visibleData.length > 0) {
-                            // First tick: apply all visible data including the partial candle
-                            const initialData = [...visibleData.slice(0, -1), partialCandle];
-                            chart.applyNewData(toKLineData(initialData));
-                            console.log(`[TradingChart] Initial data applied: ${initialData.length} candles`);
-                        } else {
-                            // Subsequent ticks: update only last candle
-                            chart.updateData(klinePartial);
-                        }
-
-                        if (tick.tickIndex % 5 === 0) { // Log every 5th tick to reduce noise
-                            console.log(`[TradingChart] Tick ${tick.tickIndex + 1}/20, price: ${tick.price.toFixed(0)}`);
-                        }
-                    } catch (e) {
-                        console.error('[TradingChart] Error updating tick:', e);
-                    }
-                }
-            },
-            onUpdate: (visibleData) => {
-                // Candle completed → full data sync
-                const klineData = toKLineData(visibleData);
-                const chart = chartInstance.current;
-
-                if (chart) {
-                    // Use applyNewData for full candle completion
-                    chart.applyNewData(klineData);
-                    console.log(`[TradingChart] Candle completed, total: ${visibleData.length}`);
-                }
-
-                // Update store with completed candle
-                if (visibleData.length > 0) {
-                    setCurrentCandle(visibleData[visibleData.length - 1]);
-                }
-
-                // Keep state in sync for other components
-                setChartData(klineData);
-            },
-            onProgress: (index) => {
-                setReplayIndex(index);
-            },
-            onComplete: () => {
-                console.log('[ReplayEngine] Playback complete');
-            },
-        });
-
-        replayEngineRef.current = engine;
-
-        // Show initial candles (limit to last 150 to prevent barcode effect)
-        // This ensures chart starts zoomed-in on Day 2 with readable candles
-        const visibleData = engine.getVisibleData();
-        const maxInitialCandles = 150; // Show max 150 candles initially
-        const startIndex = Math.max(0, visibleData.length - maxInitialCandles);
-        const limitedData = visibleData.slice(startIndex);
-
-        const initialData = toKLineData(limitedData);
-        setChartData(initialData);
-
-        console.log(`[TradingChart] Engine created successfully with ${replayData.length} candles`);
-        console.log(`[TradingChart] Showing last ${limitedData.length} of ${visibleData.length} candles initially`);
-
-        // Auto-play if isPlaying is already true (race condition fix)
-        // This handles case where user clicked Play before data loaded
-        if (isPlaying) {
-            console.log('[ReplayEngine] Auto-playing after data load (isPlaying was already true)');
-            engine.play();
-        } else {
-            console.log('[ReplayEngine] Engine created but NOT playing (isPlaying = false)');
-        }
-
-        return () => {
-            console.log('[TradingChart] Cleaning up engine');
-            engine.destroy();
+        // --- STEP 2: SANITASI (Defensive timestamp cleaning) ---
+        const sanitizeTimestamp = (time: any): number => {
+            if (typeof time === 'number') return time > 10000000000 ? Math.floor(time / 1000) : time;
+            if (time instanceof Date) return Math.floor(time.getTime() / 1000);
+            if (typeof time === 'object' && time !== null && 'time' in time) return sanitizeTimestamp(time.time);
+            if (typeof time === 'string') {
+                const parsed = new Date(time).getTime() / 1000;
+                return isNaN(parsed) ? Math.floor(Date.now() / 1000) : Math.floor(parsed);
+            }
+            return Math.floor(Date.now() / 1000);
         };
-    }, [isReplayActive, replayData, setReplayIndex, timeframe]); // playbackSpeed removed - handled by separate useEffect
 
-    // Sync playback state with engine
-    useEffect(() => {
-        const engine = replayEngineRef.current;
-        console.log(`[TradingChart] isPlaying changed to: ${isPlaying}, engine exists: ${!!engine}`);
+        const candleData: CandlestickData[] = candleHistory.map((c: ChartCandle) => ({
+            time: sanitizeTimestamp(c.time) as Time,
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+        }));
 
-        if (!engine) {
-            console.warn('[TradingChart] Cannot sync play state - engine not created yet');
-            return;
-        }
+        candleData.sort((a, b) => (a.time as number) - (b.time as number));
 
-        if (isPlaying) {
-            console.log('[TradingChart] Calling engine.play()');
-            engine.play();
-        } else {
-            console.log('[TradingChart] Calling engine.pause()');
-            engine.pause();
-        }
-    }, [isPlaying]);
-
-    // Sync speed changes with engine
-    useEffect(() => {
-        const engine = replayEngineRef.current;
-        if (!engine) return;
-
-        engine.setSpeed(playbackSpeed);
-    }, [playbackSpeed]);
-
-    // Manual seek handling
-    useEffect(() => {
-        const engine = replayEngineRef.current;
-        if (!engine || !isReplayActive) return;
-
-        // Only seek if there's a significant difference (avoid loops)
-        if (Math.abs(engine.getCurrentIndex() - replayIndex) > 1) {
-            engine.seekTo(replayIndex);
-        }
-    }, [replayIndex, isReplayActive]);
-
-    // Update indicators with FULL CLEAR approach    // Effect to handle indicator changes
-    useEffect(() => {
-        const chart = chartInstance.current;
-        if (!chart) return;
-
-        console.group('🔍 [TradingChart] Indicator Update Triggered');
-        console.log('Current indicators state:', indicators);
-        console.log('Enabled indicators:', indicators.filter(i => i.enabled));
-        console.log('Disabled indicators:', indicators.filter(i => !i.enabled));
-
-        // STEP 1: Clear ALL indicators AND their panes (v9 requires explicit paneId)
         try {
-            console.log('📌 Step 1: Clearing all indicators...');
+            // Reset dulu baru isi (Double Safety)
+            candleSeriesRef.current.setData([]);
+            candleSeriesRef.current.setData(candleData);
 
-            // Method 1: Remove all indicators globally
-            chart.removeIndicator();
-            console.log('✅ Removed all indicators globally');
-
-            // Method 2: Explicitly remove from custom panes (v9 workaround for ghost panes)
-            // This ensures panes are actually removed, not just emptied
-            try {
-                chart.removeIndicator('rsi-pane', 'RSI');
-                console.log('✅ Explicitly removed RSI from rsi-pane');
-            } catch (e) {
-                console.warn('Could not remove from rsi-pane:', e);
+            console.log(`[TradingChart] ✅ History loaded cleanly: ${candleData.length} candles`);
+            if (candleData.length > 0) {
+                console.log(`[TradingChart]   First: ${candleData[0].time}, Last: ${candleData[candleData.length - 1].time}`);
             }
-
-            try {
-                chart.removeIndicator('macd-pane', 'MACD');
-                console.log('✅ Explicitly removed MACD from macd-pane');
-            } catch (e) {
-                console.warn('Could not remove from macd-pane:', e);
-            }
-
-            // Method 3: Explicitly remove overlay indicators from main pane
-            // SMA and EMA are overlays on candle_pane, need explicit removal too
-            try {
-                chart.removeIndicator('candle_pane', 'MA');
-                console.log('✅ Explicitly removed MA (SMA) from candle_pane');
-            } catch (e) {
-                console.warn('Could not remove MA from candle_pane:', e);
-            }
-
-            try {
-                chart.removeIndicator('candle_pane', 'EMA');
-                console.log('✅ Explicitly removed EMA from candle_pane');
-            } catch (e) {
-                console.warn('Could not remove EMA from candle_pane:', e);
-            }
-
-
-            // Debug: indicators cleared successfully
-            console.log('✅ All indicators cleared from chart');
-        } catch (e) {
-            console.error('❌ Error clearing indicators:', e);
+        } catch (error) {
+            console.error('[TradingChart] ❌ Failed to set history:', error);
+            console.error('[TradingChart] Sample data:', candleData.slice(0, 3));
         }
 
-        // STEP 2: Recreate ONLY enabled indicators
-        console.log('📌 Step 2: Recreating enabled indicators...');
-        const activeTypes: string[] = [];
+        // TODO: Calculate and set Volume, VWAP, RSI from worker messages
+    }, [candleHistory]);
 
-        // ✅ CRITICAL FIX: Collect all SMA/EMA periods FIRST
-        // KLineChart stores indicators by name per pane - multiple 'MA' creates overwrite!
-        // Solution: Create ONE MA with calcParams: [20, 50] to show both periods
-        const smaPeriods: number[] = [];
-        const emaPeriods: number[] = [];
-
-        indicators.forEach((indicator) => {
-            if (indicator.enabled && indicator.period) {
-                if (indicator.type === 'sma') {
-                    smaPeriods.push(indicator.period);
-                } else if (indicator.type === 'ema') {
-                    emaPeriods.push(indicator.period);
-                }
-            }
-        });
-
-        // ✅ Sort periods in ascending order (KLineChart may expect this)
-        smaPeriods.sort((a, b) => a - b);
-        emaPeriods.sort((a, b) => a - b);
-
-        // Create SINGLE MA indicator with all SMA periods
-        if (smaPeriods.length > 0) {
-            try {
-                console.log(`Creating MA with periods: [${smaPeriods.join(', ')}]`);
-                const result = chart.createIndicator(
-                    {
-                        name: 'MA',
-                        calcParams: smaPeriods, // ✅ Multiple periods in ONE indicator!
-                    },
-                    true, // overlay
-                    { id: 'candle_pane' }
-                );
-                console.log(`✅ Created MA with ${smaPeriods.length} period(s), result:`, result);
-                smaPeriods.forEach(p => activeTypes.push(`SMA(${p})`));
-            } catch (e) {
-                console.error('❌ Failed to create MA:', e);
-            }
-        }
-
-        // Create SINGLE EMA indicator with all EMA periods
-        if (emaPeriods.length > 0) {
-            try {
-                console.log(`Creating EMA with periods: [${emaPeriods.join(', ')}]`);
-                const result = chart.createIndicator(
-                    {
-                        name: 'EMA',
-                        calcParams: emaPeriods, // ✅ Multiple periods in ONE indicator!
-                    },
-                    true, // overlay
-                    { id: 'candle_pane' }
-                );
-                console.log(`✅ Created EMA with ${emaPeriods.length} period(s), result:`, result);
-                emaPeriods.forEach(p => activeTypes.push(`EMA(${p})`));
-            } catch (e) {
-                console.error('❌ Failed to create EMA:', e);
-            }
-        }
-
-        // Process other indicator types dynamically
-        const processedTypes = new Set(['sma', 'ema']); // Already handled above
-
-        indicators.forEach((indicator) => {
-            if (indicator.enabled && !processedTypes.has(indicator.type)) {
-
-                const config = INDICATOR_CONFIG[indicator.type];
-                if (!config) {
-                    console.warn(`⚠️ No config found for indicator type: ${indicator.type}`);
-                    return;
-                }
-
-                console.log(`Creating indicator: ${indicator.type}(${indicator.period || 'default'})`);
-
-                try {
-                    // Determine pane and overlay settings
-                    const isMainPane = config.pane === 'main';
-                    const isOverlay = isMainPane;
-                    const paneId = isMainPane ? 'candle_pane' : `${indicator.type}-pane`;
-
-                    // Determine calcParams
-                    // If indicator has a specific period, use it. Otherwise fall back to config default.
-                    // Some indicators (MACD) might have fixed params in config, or multiple params.
-                    // For now, we support single period override if the indicator has 'period' property.
-                    let calcParams: number[] = [];
-
-                    if (indicator.period) {
-                        calcParams = [indicator.period];
-                        // Special handling for Bollinger (needs stdDev)
-                        if (indicator.type === 'bollinger') {
-                            calcParams = [indicator.period, 2];
-                        }
-                    } else if (config.defaultPeriod) {
-                        calcParams = [config.defaultPeriod];
-                    }
-
-                    // If specific calcParams are needed for complex indicators (MACD, SAR), 
-                    // we might need to enhance the Indicator type or config.
-                    // For now, preserving hardcoded defaults for complex ones if not simple period:
-                    if (indicator.type === 'macd') calcParams = [12, 26, 9];
-                    if (indicator.type === 'sar') calcParams = [2, 0.02, 0.2];
-                    if (indicator.type === 'kdj') calcParams = [9, 3, 3];
-
-                    const result = chart.createIndicator(
-                        {
-                            name: config.name,
-                            calcParams: calcParams.length > 0 ? calcParams : undefined,
-                        },
-                        isOverlay,
-                        { id: paneId, height: 100 }
-                    );
-
-                    console.log(`✅ Created ${config.name} in ${paneId}, result:`, result);
-                    activeTypes.push(config.name);
-
-                } catch (e) {
-                    console.error(`❌ Failed to create indicator ${indicator.id}:`, e);
-                }
-            }
-        });
-
-        // Indicator application complete
-        console.log('📊 Indicator application complete');
-
-        if (activeTypes.length > 0) {
-            console.log('✅ Active indicators:', activeTypes);
-        } else {
-            console.log('ℹ️ All indicators cleared');
-        }
-
-        console.groupEnd();
-    }, [indicators]); // TODO: Optimize to only rebuild when structure changes, not colors
-
-    // 🔧 OPTIMIZATION: Track only structural changes (enabled status + periods)
-    // Color-only changes should NOT trigger full rebuild
-    const indicatorStructure = useMemo(() => {
-        return indicators
-            .filter(i => i.enabled)
-            .map(i => `${i.type}-${i.period}`)
-            .sort()
-            .join(',');
-    }, [indicators]);
-
-    // FUTURE: Use indicatorStructure as dependency once we implement overrideIndicator for colors
-
-    // Price change callback
+    // Update current live candle (IMPERATIVE - 60 FPS performance)
     useEffect(() => {
-        if (!chartInstance.current || !onPriceChange) return;
+        if (!currentCandle) return;
+        if (!candleSeriesRef.current) return;
 
-        // Get last price from data
-        if (chartData.length > 0) {
-            const lastCandle = chartData[chartData.length - 1];
-            onPriceChange(lastCandle.close);
-        }
-    }, [chartData, onPriceChange]);
-
-    // Handle drawing tool selection
-    useEffect(() => {
-        const chart = chartInstance.current;
-        if (!chart) return;
-
-        if (activeDrawingTool) {
-            // Start drawing mode
-            try {
-                chart.createOverlay({
-                    name: activeDrawingTool,
-                    lock: false,
-                    visible: true,
-                });
-                console.log(`[TradingChart] Drawing mode enabled: ${activeDrawingTool}`);
-            } catch (e) {
-                console.warn(`Failed to create overlay ${activeDrawingTool}:`, e);
+        // CRITICAL: Sanitize timestamp to ensure it's a clean number (Unix seconds)
+        // Lightweight Charts is VERY strict about timestamp format
+        const sanitizeTimestamp = (time: any): number => {
+            // Case 1: Already a number
+            if (typeof time === 'number') {
+                // If it's in milliseconds (>10 billion), convert to seconds
+                return time > 10000000000 ? Math.floor(time / 1000) : time;
             }
+
+            // Case 2: Date object
+            if (time instanceof Date) {
+                return Math.floor(time.getTime() / 1000);
+            }
+
+            // Case 3: Object with time property (nested structure bug)
+            if (typeof time === 'object' && time !== null && 'time' in time) {
+                return sanitizeTimestamp(time.time); // Recursive
+            }
+
+            // Case 4: String timestamp
+            if (typeof time === 'string') {
+                const parsed = new Date(time).getTime() / 1000;
+                if (!isNaN(parsed)) return Math.floor(parsed);
+            }
+
+            // Fallback: Use current time (should never happen in production)
+            return Math.floor(Date.now() / 1000);
+        };
+
+        const cleanTime = sanitizeTimestamp(currentCandle.time);
+
+        // Log ONCE for debugging (throttled to avoid spam)
+        const now = Date.now();
+        if (now - lastLogTimeRef.current > 5000) {
+            console.log('[TradingChart] currentCandle raw:', currentCandle);
+            console.log('[TradingChart] Sanitized time:', cleanTime, 'from:', currentCandle.time);
+            lastLogTimeRef.current = now;
         }
-    }, [activeDrawingTool]);
 
-    // Subscribe to overlay events
+        // Update the latest candle in the chart (no setState!)
+        const candleData: CandlestickData = {
+            time: cleanTime as Time,
+            open: currentCandle.open,
+            high: currentCandle.high,
+            low: currentCandle.low,
+            close: currentCandle.close,
+        };
+
+        // Imperative update - this is FAST
+        try {
+            candleSeriesRef.current.update(candleData);
+        } catch (error) {
+            console.error('[TradingChart] Update error:', error);
+            console.error('[TradingChart] Failed candleData:', candleData);
+        }
+
+        // Update price callback
+        if (onPriceChange) {
+            onPriceChange(currentCandle.close);
+        }
+    }, [currentCandle, onPriceChange]);
+
+    // Sync crosshairs across panes
     useEffect(() => {
-        const chart = chartInstance.current;
-        if (!chart) return;
+        const mainChart = mainChartRef.current;
+        const volumeChart = volumeChartRef.current;
+        const rsiChart = rsiChartRef.current;
 
-        // Subscribe to drawing complete
-        // Note: KLineChart handles overlay creation internally
-        // We can get overlays via chart.getOverlayById() after drawing
+        if (!mainChart || !volumeChart || !rsiChart) return;
 
-        // ESC key to cancel drawing
-        const handleKeyPress = (e: KeyboardEvent) => {
-            if (e.key === 'Escape' && activeDrawingTool) {
-                setActiveDrawingTool(null);
+        const syncCrosshair = (chart: IChartApi, point: any) => {
+            if (point && point.time) {
+                chart.timeScale().scrollToPosition(0, false);
             }
         };
 
-        window.addEventListener('keydown', handleKeyPress);
+        const handleMainCrosshair = (param: any) => {
+            syncCrosshair(volumeChart, param);
+            syncCrosshair(rsiChart, param);
+        };
+
+        mainChart.subscribeCrosshairMove(handleMainCrosshair);
 
         return () => {
-            window.removeEventListener('keydown', handleKeyPress);
+            // Note: Lightweight Charts doesn't have unsubscribe, handled by chart.remove()
         };
-    }, [activeDrawingTool, setActiveDrawingTool]);
-
-    // Handle overlay management (clearing)
-    useEffect(() => {
-        const chart = chartInstance.current;
-        if (!chart) return;
-
-        // When overlays array is empty, clear all overlays from chart
-        if (overlays.length === 0) {
-            try {
-                chart.removeOverlay();
-                console.log('[TradingChart] All overlays cleared');
-            } catch (e) {
-                console.warn('Failed to clear overlays:', e);
-            }
-        }
-    }, [overlays]);
+    }, []);
 
     return (
-        <div
-            ref={chartRef}
-            data-testid="trading-chart"
-            className={`w-full h-full bg-[var(--chart-bg)] rounded-lg overflow-hidden ${className}`}
-        />
+        <div ref={chartContainerRef} className={`trading-chart-container ${className}`}>
+            {/* OHLC Legend */}
+            <div className="absolute top-2 left-2 z-10 bg-black/50 px-3 py-2 rounded text-xs font-mono text-white">
+                <span className="mr-3">O: {legendData.open.toFixed(2)}</span>
+                <span className="mr-3">H: <span className="text-green-400">{legendData.high.toFixed(2)}</span></span>
+                <span className="mr-3">L: <span className="text-red-400">{legendData.low.toFixed(2)}</span></span>
+                <span>C: {legendData.close.toFixed(2)}</span>
+            </div>
+
+            {/* Drawing Toolbar (hidden on mobile) */}
+            {!isTouchDevice && (
+                <div className="absolute top-2 right-2 z-10 bg-black/50 px-3 py-2 rounded text-xs text-white">
+                    <span className="opacity-50">Drawing tools coming soon</span>
+                </div>
+            )}
+
+            {/* Chart Panes (stacked vertically) */}
+            <div className="flex flex-col h-full">
+                <div id="main-chart" className="flex-1 min-h-[400px]" />
+                <div id="volume-chart" className="h-[100px]" />
+                <div id="rsi-chart" className="h-[150px]" />
+            </div>
+        </div>
     );
 }
-

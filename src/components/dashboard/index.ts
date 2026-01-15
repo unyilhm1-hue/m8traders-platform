@@ -1,7 +1,4 @@
-/**
- * Dashboard Components Exports
- */
-
-export { WelcomeCard } from './WelcomeCard';
-export { LearningProgress } from './LearningProgress';
-export { QuickAccessGrid } from './QuickAccessGrid';
+export * from './WelcomeCard';
+export * from './LearningProgress';
+export * from './QuickAccessGrid';
+export * from './MarketOverview';
