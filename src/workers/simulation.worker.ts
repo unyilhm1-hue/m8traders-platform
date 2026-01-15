@@ -313,6 +313,10 @@ class SimulationEngine {
     private numTicks: number = 20; // ticks per candle
     private baseTickDuration: number = 100; // ms per tick at 1x speed
 
+    // ✅ NEW: Throttling for 60 FPS (16ms target)
+    private lastMessageTime: number = 0;
+    private readonly MESSAGE_THROTTLE_MS: number = 16; // ~60 FPS
+
     // Aggregated candle (for Lightweight Charts)
     private currentAggregatedCandle: {
         time: number;
@@ -334,17 +338,18 @@ class SimulationEngine {
         // Pastikan candle.t dikonversi ke millisecond number yang valid SEBELUM masuk logic simulasi
         this.candles = candles.map(c => {
             let timestamp: number;
+            const rawTimestamp: any = c.t; // Type as any first to allow instanceof check
 
-            if (typeof c.t === 'number') {
+            if (typeof rawTimestamp === 'number') {
                 // --- PERBAIKAN DI SINI ---
                 // Cek apakah angka ini Detik atau Ms?
                 // Angka 10.000.000.000 (10 Miliar) adalah batas aman tahun 2286.
                 // Jika < 10 Miliar, berarti pasti Detik -> Kali 1000 biar jadi MS.
-                timestamp = c.t < 10000000000 ? c.t * 1000 : c.t;
-            } else if (c.t instanceof Date) {
-                timestamp = c.t.getTime();
-            } else if (typeof c.t === 'string') {
-                timestamp = new Date(c.t).getTime();
+                timestamp = rawTimestamp < 10000000000 ? rawTimestamp * 1000 : rawTimestamp;
+            } else if (rawTimestamp instanceof Date) {
+                timestamp = rawTimestamp.getTime();
+            } else if (typeof rawTimestamp === 'string') {
+                timestamp = new Date(rawTimestamp).getTime();
             } else {
                 // Fallback: use current time
                 console.error('[SimulationWorker] Invalid timestamp type:', typeof c.t);
@@ -481,8 +486,7 @@ class SimulationEngine {
         const price = this.pricePath[this.currentTickIndex];
         const volume = this.volumePath[this.currentTickIndex];
 
-        // Calculate tick timestamp (interpolate within candle duration)
-        // Assuming 1min candles = 60000ms
+        // Calculate tick timestamp with incremental offset
         const candleDuration = 60000; // 1 minute in ms
         const tickProgress = this.currentTickIndex / this.numTicks;
         const timestamp = candle.t + (tickProgress * candleDuration);
@@ -499,15 +503,35 @@ class SimulationEngine {
         // Update aggregated candle
         this.updateAggregatedCandle(price);
 
-        // Send tick to main thread
-        postMessage({ type: 'TICK', data: tick });
+        // ✅ THROTTLING LOGIC: Smart 60 FPS control
+        const now = Date.now();
+        const timeSinceLastMessage = now - this.lastMessageTime;
+        const isFirstTick = this.currentTickIndex === 0;
+        const isLastTick = this.currentTickIndex >= this.numTicks - 1;
 
-        // Send aggregated candle update (for Lightweight Charts)
-        if (this.currentAggregatedCandle) {
-            postMessage({
-                type: 'CANDLE_UPDATE',
-                candle: this.currentAggregatedCandle
-            });
+        // Send message if:
+        // 1. Enough time passed (16ms = 60 FPS)
+        // 2. OR it's the first tick (candle open)
+        // 3. OR it's the last tick (candle close - critical!)
+        const shouldSendMessage =
+            timeSinceLastMessage >= this.MESSAGE_THROTTLE_MS ||
+            isFirstTick ||
+            isLastTick;
+
+        if (shouldSendMessage) {
+            // Send tick to main thread (for orderbook/tape)
+            postMessage({ type: 'TICK', data: tick });
+
+            // ✅ OPTIMIZATION: Only send CANDLE_UPDATE on last tick
+            // This prevents 20 chart updates per candle (now just 1!)
+            if (isLastTick && this.currentAggregatedCandle) {
+                postMessage({
+                    type: 'CANDLE_UPDATE',
+                    candle: this.currentAggregatedCandle
+                });
+            }
+
+            this.lastMessageTime = now;
         }
 
         // Advance tick

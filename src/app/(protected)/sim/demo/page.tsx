@@ -51,16 +51,20 @@ export default function SimDemoPage() {
 
                 // 1. Ambil daftar tanggal unik dengan ZONA WAKTU JAKARTA (WIB)
                 // Ini penting agar daftar tanggal di sini COCOK dengan filter di Store
-                const uniqueDates = Array.from(new Set(candles.map((c: any) => {
-                    // Normalisasi timestamp
-                    const ts = c.t > 10000000000 ? c.t / 1000 : c.t;
-                    const dateObj = new Date(ts * 1000);
+                const uniqueDates: string[] = Array.from(
+                    new Set(
+                        candles.map((c: any) => {
+                            // Normalisasi timestamp
+                            const ts = c.t > 10000000000 ? c.t / 1000 : c.t;
+                            const dateObj = new Date(ts * 1000);
 
-                    // Force format YYYY-MM-DD sesuai WIB
-                    return dateObj.toLocaleDateString('en-CA', {
-                        timeZone: 'Asia/Jakarta'
-                    });
-                }))).sort();
+                            // Force format YYYY-MM-DD sesuai WIB
+                            return dateObj.toLocaleDateString('en-CA', {
+                                timeZone: 'Asia/Jakarta'
+                            });
+                        })
+                    )
+                ).sort() as string[];
 
                 console.log(`📅 [SimDemoPage] Total Data Tersedia (WIB): ${uniqueDates.length} hari`);
                 console.log(`   Date Range (WIB): ${uniqueDates[0]} to ${uniqueDates[uniqueDates.length - 1]}`);

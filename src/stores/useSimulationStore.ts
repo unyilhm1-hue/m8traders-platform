@@ -228,6 +228,20 @@ export const useSimulationStore = create<SimulationState>()(
 
         setCandleHistory(candles) {
             set((state) => {
+                // ✅ OPTIMIZATION: Prevent unnecessary array recreation
+                // Check if new data is identical to current state
+                if (state.candleHistory.length > 0 && candles.length > 0) {
+                    const currentLastTime = state.candleHistory[state.candleHistory.length - 1]?.time;
+                    const newLastTime = candles[candles.length - 1]?.t;
+
+                    // If same length and same last timestamp, data hasn't changed
+                    if (state.candleHistory.length === candles.length &&
+                        currentLastTime === newLastTime) {
+                        console.log('[SimulationStore] ⏭️ Skipping identical candleHistory update');
+                        return; // Don't mutate state!
+                    }
+                }
+
                 const converted: ChartCandle[] = [];
 
                 candles.forEach((c, index) => {
@@ -353,6 +367,21 @@ export const useSimulationStore = create<SimulationState>()(
             set((state) => {
                 state.selectedDate = dateStr;
                 state.simulationCandles = simulationQueue; // Data Future (WIB Only)
+
+                // ✅ OPTIMIZATION: Check before updating candleHistory
+                // Prevent unnecessary array recreation if history hasn't changed
+                if (state.candleHistory.length > 0 && historyContext.length > 0) {
+                    const currentLastTime = state.candleHistory[state.candleHistory.length - 1]?.time;
+                    const newLastTime = historyContext[historyContext.length - 1]?.time;
+
+                    if (state.candleHistory.length === historyContext.length &&
+                        currentLastTime === newLastTime) {
+                        console.log('[Store] ⏭️ Skipping identical history update in loadSimulationDay');
+                        // Still update selectedDate and simulationCandles, but skip history
+                        state.currentCandle = null;
+                        return;
+                    }
+                }
 
                 // Sortir History & Simpan
                 historyContext.sort((a, b) => a.time - b.time);
