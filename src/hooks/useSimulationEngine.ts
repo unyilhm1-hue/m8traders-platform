@@ -59,13 +59,8 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
                         }
                         break;
 
-                    case 'HISTORY_READY':
-                        console.log(`[useSimulationEngine] History ready: ${event.data.totalCandles} candles`);
-                        // Populate store with historical candles for chart initialization
-                        if (event.data.candles) {
-                            setCandleHistory(event.data.candles);
-                        }
-                        break;
+                    // ✅ HISTORY_READY removed - History is managed by page.tsx via loadSimulationDay
+                    // This prevents worker from overwriting history with future data
 
                     case 'DATA_READY':
                         console.log(`[useSimulationEngine] Data loaded: ${event.data.totalCandles} candles`);

@@ -369,13 +369,8 @@ class SimulationEngine {
             this.regeneratePaths();
             this.initializeAggregatedCandle(); // Initialize first candle
 
-            // Emit HISTORY_READY with all historical candles
-            postMessage({
-                type: 'HISTORY_READY',
-                candles: this.candles, // Full array for chart initialization
-                totalCandles: candles.length
-            });
-
+            // ✅ NO HISTORY_READY - History is managed by page.tsx via loadSimulationDay
+            // Worker only handles simulation data (future candles)
             postMessage({ type: 'DATA_READY', totalCandles: candles.length });
         }
     }
@@ -503,35 +498,41 @@ class SimulationEngine {
         // Update aggregated candle
         this.updateAggregatedCandle(price);
 
-        // ✅ THROTTLING LOGIC: Smart 60 FPS control
+        // ✅ ENHANCED THROTTLING: Send updates for smooth candle animation
         const now = Date.now();
         const timeSinceLastMessage = now - this.lastMessageTime;
         const isFirstTick = this.currentTickIndex === 0;
         const isLastTick = this.currentTickIndex >= this.numTicks - 1;
 
         // Send message if:
-        // 1. Enough time passed (16ms = 60 FPS)
-        // 2. OR it's the first tick (candle open)
+        // 1. Enough time passed (16ms = 60 FPS for ticks, 100ms for candles)
+        // 2. OR it's the first tick (candle open - critical!)
         // 3. OR it's the last tick (candle close - critical!)
-        const shouldSendMessage =
+        const shouldSendTick =
             timeSinceLastMessage >= this.MESSAGE_THROTTLE_MS ||
             isFirstTick ||
             isLastTick;
 
-        if (shouldSendMessage) {
+        // ✅ SMOOTH CANDLE UPDATES: Send CANDLE_UPDATE every 100ms OR on critical ticks
+        // This creates smooth transitions instead of "jumping" from open to close
+        const CANDLE_UPDATE_THROTTLE = 100; // Update chart every 100ms for smooth feel
+        const shouldSendCandleUpdate =
+            timeSinceLastMessage >= CANDLE_UPDATE_THROTTLE ||
+            isFirstTick || // Always send on open
+            isLastTick;    // Always send on close
+
+        if (shouldSendTick) {
             // Send tick to main thread (for orderbook/tape)
             postMessage({ type: 'TICK', data: tick });
-
-            // ✅ OPTIMIZATION: Only send CANDLE_UPDATE on last tick
-            // This prevents 20 chart updates per candle (now just 1!)
-            if (isLastTick && this.currentAggregatedCandle) {
-                postMessage({
-                    type: 'CANDLE_UPDATE',
-                    candle: this.currentAggregatedCandle
-                });
-            }
-
             this.lastMessageTime = now;
+        }
+
+        // ✅ KEY FIX: Send candle updates throughout formation, not just at end
+        if (shouldSendCandleUpdate && this.currentAggregatedCandle) {
+            postMessage({
+                type: 'CANDLE_UPDATE',
+                candle: this.currentAggregatedCandle
+            });
         }
 
         // Advance tick
