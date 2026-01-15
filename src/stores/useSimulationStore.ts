@@ -275,72 +275,95 @@ export const useSimulationStore = create<SimulationState>()(
             });
         },
 
-        loadSimulationDay: (date, allCandles) => {
-            console.log(`[SimulationStore] Loading simulation for date: ${date}`);
+        loadSimulationDay: (dateStr, allCandles) => {
+            console.log(`[Store] 🌏 Enforcing WIB Logic for Date: ${dateStr}`);
 
-            // --- 1. LOGIKA HITUNGAN (Di luar 'set' agar bisa di-return) ---
-            const selectedDate = new Date(date);
+            // --- 1. SETTING BATAS WAKTU WIB (The WIB Enforcer) ---
+            // Kita parsing tanggal string (YYYY-MM-DD)
+            const [year, month, day] = dateStr.split('-').map(Number);
 
-            // Market hours (WIB adjustment might be needed, but assuming local 09:00-16:00)
-            const marketOpen = new Date(selectedDate);
-            marketOpen.setHours(9, 0, 0, 0);
-            const marketOpenTimestamp = Math.floor(marketOpen.getTime() / 1000);
+            // Buat objek Date seolah-olah di UTC, lalu kurangi offset agar pas di 00:00 WIB
+            // WIB = UTC+7. Jadi 00:00 WIB = 17:00 UTC hari sebelumnya.
+            // Cara paling aman: Pakai string comparison dengan Locale Jakarta.
 
-            const marketClose = new Date(selectedDate);
-            marketClose.setHours(16, 0, 0, 0);
-            const marketCloseTimestamp = Math.floor(marketClose.getTime() / 1000);
+            const marketOpenHour = 9;  // 09:00 WIB
+            const marketCloseHour = 16; // 16:00 WIB
 
-            console.log(`[SimulationStore] Market hours: ${marketOpenTimestamp} (09:00) to ${marketCloseTimestamp} (16:00)`);
-
-            // Filter Arrays
-            const historyContext: Candle[] = [];
+            const historyContext: ChartCandle[] = [];
             const simulationQueue: Candle[] = [];
 
-            allCandles.forEach((candle) => {
-                // Normalisasi timestamp (ms -> s)
-                const candleTime = candle.t > 10000000000 ? Math.floor(candle.t / 1000) : candle.t;
+            allCandles.forEach((c) => {
+                // A. Normalisasi Timestamp (Pastikan Detik vs Milidetik aman)
+                const rawT = c.t || (c as any).time; // Handle 't' atau 'time'
+                let tsMs: number; // Timestamp dalam Milliseconds
 
-                if (candleTime < marketOpenTimestamp) {
-                    historyContext.push(candle);
-                } else if (candleTime >= marketOpenTimestamp && candleTime <= marketCloseTimestamp) {
-                    simulationQueue.push(candle);
+                if (typeof rawT === 'number') {
+                    // Jika < 10 Miliar berarti Detik, kali 1000
+                    tsMs = rawT < 10000000000 ? rawT * 1000 : rawT;
+                } else {
+                    tsMs = new Date(rawT).getTime();
+                }
+
+                // B. CEK TANGGAL DENGAN ZONA WAKTU JAKARTA (WIB)
+                // Ini inti dari ide Anda: Menggunakan 'Asia/Jakarta' secara eksplisit
+                const candleDateObj = new Date(tsMs);
+
+                // Konversi timestamp candle ke string tanggal WIB ("2026-01-15")
+                const candleDateWIB = candleDateObj.toLocaleDateString('en-CA', {
+                    timeZone: 'Asia/Jakarta'
+                }); // en-CA formatnya YYYY-MM-DD, sangat presisi untuk sorting
+
+                // C. LOGIKA FILTER (THE GREAT SPLIT)
+                if (candleDateWIB < dateStr) {
+                    // Jika tanggal candle < Tanggal Terpilih -> Masuk HISTORY
+                    historyContext.push({
+                        time: Math.floor(tsMs / 1000), // Chart butuh Detik
+                        open: c.o || (c as any).open,
+                        high: c.h || (c as any).high,
+                        low: c.l || (c as any).low,
+                        close: c.c || (c as any).close,
+                    });
+                } else if (candleDateWIB === dateStr) {
+                    // Jika tanggal candle == Tanggal Terpilih -> Cek Jam Market
+                    // Ambil jam candle dalam WIB (0-23)
+                    const candleHourWIB = Number(candleDateObj.toLocaleString('en-US', {
+                        hour: 'numeric',
+                        hour12: false,
+                        timeZone: 'Asia/Jakarta'
+                    }));
+
+                    // Masukkan ke SIMULASI (Queue)
+                    // Opsional: Filter jam 09:00 - 16:00 biar rapi
+                    if (candleHourWIB >= marketOpenHour && candleHourWIB <= marketCloseHour) {
+                        simulationQueue.push({
+                            ...c,
+                            t: tsMs // Simpan dalam MS untuk Worker
+                        });
+                    }
                 }
             });
 
-            console.log(`[SimulationStore] Split complete:`);
-            console.log(`  - History Context: ${historyContext.length} candles`);
-            console.log(`  - Simulation Queue: ${simulationQueue.length} candles`);
-
-            // Validasi Data Kosong
+            // Validasi
             if (simulationQueue.length === 0) {
-                console.error(`[SimulationStore] ❌ No data found for ${date}`);
-                // Tetap return object error, jangan throw exception biar UI gak crash
-                return { historyCount: historyContext.length, simCount: 0, error: `No data for ${date}` };
+                console.warn(`[Store] ⚠️ No data found for ${dateStr} in WIB timezone!`);
+                return { historyCount: historyContext.length, simCount: 0, error: "No data in WIB range" };
             }
 
-            // --- 2. UPDATE STATE (Di dalam 'set') ---
+            // D. UPDATE STATE
             set((state) => {
-                state.selectedDate = date;
-                state.simulationCandles = simulationQueue;
+                state.selectedDate = dateStr;
+                state.simulationCandles = simulationQueue; // Data Future (WIB Only)
 
-                // Convert History ke Format Chart
-                const convertedHistory: ChartCandle[] = historyContext.map(c => ({
-                    time: c.t > 10000000000 ? Math.floor(c.t / 1000) : c.t,
-                    open: c.o,
-                    high: c.h,
-                    low: c.l,
-                    close: c.c
-                })).sort((a, b) => a.time - b.time); // Wajib sort!
+                // Sortir History & Simpan
+                historyContext.sort((a, b) => a.time - b.time);
+                state.candleHistory = historyContext;
 
-                state.candleHistory = convertedHistory;
+                // Reset candle aktif
+                state.currentCandle = null;
             });
 
-            console.log(`[SimulationStore] ✅ Ready for simulation!`);
-            console.log(`  - Selected Date: ${date}`);
-            console.log(`  - History: ${historyContext.length} candles`);
-            console.log(`  - Simulation: ${simulationQueue.length} candles`);
+            console.log(`[Store] ✅ WIB Split Success: ${historyContext.length} History, ${simulationQueue.length} Sim`);
 
-            // --- 3. RETURN HASIL KE KOMPONEN ---
             return {
                 historyCount: historyContext.length,
                 simCount: simulationQueue.length,

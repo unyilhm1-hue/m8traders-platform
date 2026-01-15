@@ -46,15 +46,24 @@ export default function SimDemoPage() {
                 const { candles, ticker } = result.data; // Data mentah (30 hari)
                 console.log(`✅ [SimDemoPage] Loaded ${candles.length} candles for ${ticker}`);
 
-                // --- LOGIKA RANDOM ENTRY POINT ---
 
-                // 1. Ekstrak Daftar Tanggal Unik yang Ada di JSON
-                const uniqueDates = Array.from(new Set(candles.map((c: any) =>
-                    new Date(c.t).toISOString().split('T')[0]
-                ))).sort();
+                // --- LOGIKA RANDOM ENTRY POINT (WIB SYNCED) ---
 
-                console.log(`📅 [SimDemoPage] Total Available Days: ${uniqueDates.length} days`);
-                console.log(`   Date Range: ${uniqueDates[0]} to ${uniqueDates[uniqueDates.length - 1]}`);
+                // 1. Ambil daftar tanggal unik dengan ZONA WAKTU JAKARTA (WIB)
+                // Ini penting agar daftar tanggal di sini COCOK dengan filter di Store
+                const uniqueDates = Array.from(new Set(candles.map((c: any) => {
+                    // Normalisasi timestamp
+                    const ts = c.t > 10000000000 ? c.t / 1000 : c.t;
+                    const dateObj = new Date(ts * 1000);
+
+                    // Force format YYYY-MM-DD sesuai WIB
+                    return dateObj.toLocaleDateString('en-CA', {
+                        timeZone: 'Asia/Jakarta'
+                    });
+                }))).sort();
+
+                console.log(`📅 [SimDemoPage] Total Data Tersedia (WIB): ${uniqueDates.length} hari`);
+                console.log(`   Date Range (WIB): ${uniqueDates[0]} to ${uniqueDates[uniqueDates.length - 1]}`);
 
                 // 2. Tentukan Buffer History (Misal: Wajib punya 5 hari ke belakang)
                 const MIN_HISTORY_DAYS = 5;
@@ -74,7 +83,7 @@ export default function SimDemoPage() {
                     const randomIndex = Math.floor(Math.random() * (maxIndex - validStartIndex + 1)) + validStartIndex;
                     randomTargetDate = uniqueDates[randomIndex];
 
-                    console.log(`🎲 [SimDemoPage] Random Start Date: ${randomTargetDate} (Day ${randomIndex + 1}/${uniqueDates.length})`);
+                    console.log(`🎲 [SimDemoPage] Random Start (WIB): ${randomTargetDate} (Hari ke-${randomIndex + 1}/${uniqueDates.length})`);
                 }
 
                 // 4. Load ke Store menggunakan Tanggal Acak tersebut
