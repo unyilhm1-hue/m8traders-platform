@@ -342,17 +342,12 @@ class SimulationEngine {
             const rawTimestamp: any = c.t; // Type as any first to allow instanceof check
 
             if (typeof rawTimestamp === 'number') {
-                // --- PERBAIKAN DI SINI ---
-                // Cek apakah angka ini Detik atau Ms?
-                // Angka 10.000.000.000 (10 Miliar) adalah batas aman tahun 2286.
-                // Jika < 10 Miliar, berarti pasti Detik -> Kali 1000 biar jadi MS.
                 timestamp = rawTimestamp < 10000000000 ? rawTimestamp * 1000 : rawTimestamp;
             } else if (rawTimestamp instanceof Date) {
                 timestamp = rawTimestamp.getTime();
             } else if (typeof rawTimestamp === 'string') {
                 timestamp = new Date(rawTimestamp).getTime();
             } else {
-                // Fallback: use current time
                 console.error('[SimulationWorker] Invalid timestamp type:', typeof c.t);
                 timestamp = Date.now();
             }
@@ -362,6 +357,10 @@ class SimulationEngine {
                 t: timestamp // SEKARANG PASTI MILLISECONDS
             };
         });
+
+        // ✅ FIX: Sort candles by timestamp untuk ensure monotonic time
+        this.candles.sort((a, b) => a.t - b.t);
+        console.log(`[SimulationWorker] ✅ Sorted ${this.candles.length} candles by time`);
 
         this.currentCandleIndex = 0;
         this.currentTickIndex = 0;
@@ -482,8 +481,12 @@ class SimulationEngine {
         const price = this.pricePath[this.currentTickIndex];
         const volume = this.volumePath[this.currentTickIndex];
 
-        // Calculate tick timestamp with incremental offset
-        const candleDuration = 60000; // 1 minute in ms
+        // ✅ FIX: Calculate ACTUAL candle duration from data (not hardcoded 60s)
+        const nextCandle = this.candles[this.currentCandleIndex + 1];
+        const candleDuration = nextCandle
+            ? (nextCandle.t - candle.t) // Actual duration between candles
+            : 60000; // Fallback to 1 minute if last candle
+
         const tickProgress = this.currentTickIndex / this.numTicks;
         const timestamp = candle.t + (tickProgress * candleDuration);
 
@@ -499,10 +502,9 @@ class SimulationEngine {
         // Update aggregated candle
         this.updateAggregatedCandle(price);
 
-        // ✅ ENHANCED THROTTLING: Separate tracking for ticks and candle updates
+        // ✅ FIX: TICK-BASED updates instead of time-based (syncs with any speed)
         const now = Date.now();
         const timeSinceLastTick = now - this.lastMessageTime;
-        const timeSinceLastCandleUpdate = now - this.lastCandleUpdateTime;
         const isFirstTick = this.currentTickIndex === 0;
         const isLastTick = this.currentTickIndex >= this.numTicks - 1;
 
@@ -512,10 +514,11 @@ class SimulationEngine {
             isFirstTick ||
             isLastTick;
 
-        // ✅ KEY FIX: Candle updates use separate 100ms throttle (independent!)
-        const CANDLE_UPDATE_THROTTLE = 100; // 10 updates per second
+        // ✅ KEY FIX: Update candle every N ticks (not time-based!)
+        // This stays consistent regardless of playback speed
+        const TICKS_PER_CANDLE_UPDATE = 2; // Update every 2 ticks = ~10 updates per candle
         const shouldSendCandleUpdate =
-            timeSinceLastCandleUpdate >= CANDLE_UPDATE_THROTTLE ||
+            this.currentTickIndex % TICKS_PER_CANDLE_UPDATE === 0 ||
             isFirstTick || // Always send on open
             isLastTick;    // Always send on close
 
@@ -524,13 +527,12 @@ class SimulationEngine {
             this.lastMessageTime = now;
         }
 
-        // Send candle updates independently from ticks
+        // Send candle updates based on tick count (speed-independent!)
         if (shouldSendCandleUpdate && this.currentAggregatedCandle) {
             postMessage({
                 type: 'CANDLE_UPDATE',
                 candle: this.currentAggregatedCandle
             });
-            this.lastCandleUpdateTime = now; // Update separate tracker!
         }
 
         // Advance tick

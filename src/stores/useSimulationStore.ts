@@ -363,6 +363,10 @@ export const useSimulationStore = create<SimulationState>()(
                 return { historyCount: historyContext.length, simCount: 0, error: "No data in WIB range" };
             }
 
+            // ✅ FIX: Sort simulation queue untuk ensure monotonic timestamps
+            simulationQueue.sort((a, b) => a.t - b.t);
+            console.log(`[Store] ✅ Sorted ${simulationQueue.length} simulation candles by time`);
+
             // D. UPDATE STATE
             set((state) => {
                 state.selectedDate = dateStr;
