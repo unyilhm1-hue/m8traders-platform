@@ -666,7 +666,12 @@ class SimulationEngine {
     private tickSchedule: TickSchedule[] = [];
     private currentTickIndex: number = 0;
     private candleStartTime: number = 0;
-    private readonly MAX_TICKS_PER_POLL = 10;
+
+    // 🔥 FIX 1: Adaptive throttle instead of hard cap
+    private readonly BASE_TICKS_PER_POLL = 10;
+    private readonly MAX_CATCHUP_TICKS = 50;  // Allow burst catch-up
+    private lastPollTime: number = 0;
+    private tickBacklog: number = 0;
 
     private currentAggregatedCandle: {
         time: number;
@@ -675,6 +680,10 @@ class SimulationEngine {
         low: number;
         close: number;
     } | null = null;
+
+    // 🔥 FIX 3: Continuous candle updates
+    private lastCandleUpdateTime: number = 0;
+    private readonly CANDLE_UPDATE_INTERVAL = 100; // Update every 100ms
 
     private averageVolume: number = 1;
     private marketConfig: MarketConfig = DEFAULT_MARKET_CONFIG;
@@ -989,7 +998,29 @@ class SimulationEngine {
         const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
         const elapsedTime = (now - this.candleStartTime) * this.playbackSpeed;
 
+        // 🔥 FIX 2: Calculate adaptive throttle based on time delta
+        const timeSinceLastPoll = this.lastPollTime > 0 ? now - this.lastPollTime : 16;
+        this.lastPollTime = now;
+
+        // If tab was throttled (>100ms gap), allow catch-up burst
+        const wasThrottled = timeSinceLastPoll > 100;
+        const maxTicksThisPoll = wasThrottled
+            ? this.MAX_CATCHUP_TICKS  // Catch-up mode
+            : this.BASE_TICKS_PER_POLL; // Normal mode
+
         let ticksFiredThisPoll = 0;
+        let overdueCount = 0;
+
+        // Count overdue ticks for backlog tracking
+        for (let i = this.currentTickIndex; i < this.tickSchedule.length; i++) {
+            if (this.tickSchedule[i].targetTime <= elapsedTime) {
+                overdueCount++;
+            } else {
+                break;
+            }
+        }
+
+        this.tickBacklog = overdueCount;
 
         while (this.currentTickIndex < this.tickSchedule.length) {
             const tick = this.tickSchedule[this.currentTickIndex];
@@ -998,15 +1029,26 @@ class SimulationEngine {
                 break; // Not yet time
             }
 
-            // Anti-burst throttle
-            if (ticksFiredThisPoll >= this.MAX_TICKS_PER_POLL) {
-                console.warn('[SimWorker] ⚠️ Tick burst throttled');
+            // Adaptive throttle with catch-up
+            if (ticksFiredThisPoll >= maxTicksThisPoll) {
+                if (wasThrottled) {
+                    console.log(`[SimWorker] 🚀 Catch-up mode: processed ${ticksFiredThisPoll} ticks, ${this.tickBacklog} remaining`);
+                } else {
+                    console.warn(`[SimWorker] ⚠️ Tick burst throttled (backlog: ${this.tickBacklog})`);
+                }
                 break;
             }
 
             this.fireTick(tick);
             this.currentTickIndex++;
             ticksFiredThisPoll++;
+        }
+
+        // 🔥 FIX 3: Send continuous candle updates even when ticks are throttled
+        const timeSinceLastUpdate = now - this.lastCandleUpdateTime;
+        if (this.currentAggregatedCandle && timeSinceLastUpdate >= this.CANDLE_UPDATE_INTERVAL) {
+            this.sendCandleUpdate('continuous');
+            this.lastCandleUpdateTime = now;
         }
 
         // Check if candle complete
@@ -1037,27 +1079,29 @@ class SimulationEngine {
             }
         });
 
-        // 🔥 FIX: Throttle CANDLE_UPDATE to prevent barcode effect
-        // Send updates only on: first tick, every 10th tick, and last tick
-        // This prevents Lightweight Charts from creating 60+ candles per minute
+        // 🔥 IMPROVED: Smart candle update throttling
+        // Send updates on: first tick, every 10th tick, last tick
+        // Continuous updates (every 100ms) handled in pollTicks()
         const isFirstTick = tick.tickIndex === 0;
         const isLastTick = tick.tickIndex === this.tickSchedule.length - 1;
-        const isBatchUpdate = tick.tickIndex % 10 === 0; // Every 10th tick
+        const isBatchUpdate = tick.tickIndex % 10 === 0;
 
         if (this.currentAggregatedCandle && (isFirstTick || isLastTick || isBatchUpdate)) {
-            // 🔍 DEBUG: Log candle updates to detect timestamp changes
-            if (tick.tickIndex < 5 || tick.tickIndex % 20 === 0) {
-                console.log(`[Worker] 📊 CANDLE_UPDATE #${tick.tickIndex}: time=${this.currentAggregatedCandle.time}, O=${this.currentAggregatedCandle.open.toFixed(2)}, H=${this.currentAggregatedCandle.high.toFixed(2)}, L=${this.currentAggregatedCandle.low.toFixed(2)}, C=${this.currentAggregatedCandle.close.toFixed(2)}`);
-            }
-
-            postMessage({
-                type: 'CANDLE_UPDATE',
-                candle: this.currentAggregatedCandle
-            });
-
-            // 🔍 CHECKPOINT 1: Worker output
-            console.log(`[Worker→] CANDLE_UPDATE sent: time=${this.currentAggregatedCandle.time}, C=${this.currentAggregatedCandle.close.toFixed(2)}`);
+            this.sendCandleUpdate('tick');
         }
+    }
+
+    /**
+     * Send candle update to main thread
+     * Centralized method to reduce code duplication
+     */
+    private sendCandleUpdate(source: 'tick' | 'continuous' | 'final') {
+        if (!this.currentAggregatedCandle) return;
+
+        postMessage({
+            type: 'CANDLE_UPDATE',
+            candle: this.currentAggregatedCandle
+        });
     }
 
     private advanceToNextCandle() {

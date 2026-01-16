@@ -5,7 +5,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { TradingChart } from '@/components/chart';
+import dynamic from 'next/dynamic';
 import { DrawingSidebar } from '@/components/chart/DrawingSidebar';
 import { CompactToolbar } from '@/components/trading/CompactToolbar';
 import { PositionDisplay, PendingOrders } from '@/components/trading';
@@ -16,6 +16,20 @@ import { useTradingStore } from '@/stores';
 import { SimulationEngineProvider, useSimulationEngineContext } from '@/contexts/SimulationEngineContext';
 import { useCurrentPrice, useSimulationStore } from '@/stores/useSimulationStore';
 import { formatPrice, formatIDR } from '@/lib/format';
+
+// 🚀 PERFORMANCE FIX: Lazy-load TradingChart to prevent heavy bundle compilation on first load
+const TradingChart = dynamic(
+    () => import('@/components/chart').then(mod => ({ default: mod.TradingChart })),
+    {
+        ssr: false,
+        loading: () => (
+            <div className="h-full flex items-center justify-center bg-[var(--bg-secondary)]">
+                <div className="text-[var(--text-secondary)]">Loading chart...</div>
+            </div>
+        )
+    }
+);
+
 
 function SimDemoPageContent() {
     const [activeTab, setActiveTab] = useState<'position' | 'pending' | 'trades'>('position');

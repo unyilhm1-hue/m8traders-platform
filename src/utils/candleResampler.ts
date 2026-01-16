@@ -21,6 +21,18 @@ export interface Candle {
     volume: number;
 }
 
+/**
+ * Extended candle with metadata for resampled data
+ * Helps UI distinguish partial vs complete candles
+ */
+export interface ResampledCandle extends Candle {
+    metadata?: {
+        isPartial: boolean;      // True if bucket is incomplete
+        candleCount: number;     // Actual candles in this bucket
+        expectedCount: number;   // Expected candles for full bucket
+    };
+}
+
 export type Interval = '1m' | '2m' | '5m' | '15m' | '30m' | '60m' | '1h' | '4h' | '1d';
 
 /**
@@ -147,10 +159,14 @@ function validateOHLC(candle: Candle): boolean {
 }
 
 /**
- * Aggregate bucket into single candle with OHLCV logic
+ * Aggregate bucket into single candle with OHLCV logic and metadata
  * Optimized: Single-pass loop for better performance
+ * 
+ * @param bucket - Array of source candles to aggregate
+ * @param expectedCount - Expected number of candles for a complete bucket
+ * @returns Resampled candle with metadata
  */
-function aggregateBucket(bucket: Candle[]): Candle {
+function aggregateBucket(bucket: Candle[], expectedCount?: number): ResampledCandle {
     if (bucket.length === 0) {
         throw new Error('Cannot aggregate empty bucket');
     }
@@ -170,7 +186,7 @@ function aggregateBucket(bucket: Candle[]): Candle {
         volume += candle.volume;
     }
 
-    const result: Candle = {
+    const result: ResampledCandle = {
         time: bucket[0].time,                          // First candle's time
         open: bucket[0].open,                          // First candle's open
         close: bucket[bucket.length - 1].close,        // Last candle's close
@@ -178,6 +194,15 @@ function aggregateBucket(bucket: Candle[]): Candle {
         low,                                           // Lowest low
         volume                                         // Sum volumes
     };
+
+    // Add metadata if expected count is provided
+    if (expectedCount !== undefined) {
+        result.metadata = {
+            isPartial: bucket.length < expectedCount,
+            candleCount: bucket.length,
+            expectedCount
+        };
+    }
 
     // Validate result to catch data corruption
     if (!validateOHLC(result)) {
@@ -190,13 +215,17 @@ function aggregateBucket(bucket: Candle[]): Candle {
 /**
  * Resample candles from source interval to target interval
  * 
+ * @param sourceCandles - Source candles to resample
+ * @param sourceInterval - Source interval (e.g., '1m')
+ * @param targetInterval - Target interval (e.g., '5m')
+ * @returns Resampled candles with metadata
  * @throws {Error} If intervals are incompatible or insufficient data
  */
 export function resampleCandles(
     sourceCandles: Candle[],
     sourceInterval: Interval,
     targetInterval: Interval
-): Candle[] {
+): ResampledCandle[] {
     // Validation
     if (!isCompatible(sourceInterval, targetInterval)) {
         throw new Error(
@@ -221,11 +250,15 @@ export function resampleCandles(
         return [...sourceCandles];
     }
 
-    // Resample
+    // Resample with metadata
     const bucketMinutes = intervalToMinutes(targetInterval);
     const buckets = groupByTime(sourceCandles, bucketMinutes);
 
-    return buckets.map(aggregateBucket);
+    // Calculate expected candles per bucket
+    const ratio = intervalToMinutes(targetInterval) / intervalToMinutes(sourceInterval);
+    const expectedCount = Math.round(ratio);
+
+    return buckets.map(bucket => aggregateBucket(bucket, expectedCount));
 }
 
 /**
