@@ -671,10 +671,9 @@ class SimulationEngine {
     private updateAggregatedCandle(price: number, timestamp: number) {
         if (!this.currentAggregatedCandle) return;
 
-        // ✅ FIX: Update timestamp to current tick's time (monotonically increasing!)
-        // This ensures each CANDLE_UPDATE has a unique, increasing timestamp
-        // Lightweight Charts silently ignores updates with duplicate timestamps
-        this.currentAggregatedCandle.time = Math.floor(timestamp / 1000);
+        // ✅ FIX: Do NOT update timestamp - it should remain the candle's start time
+        // Lightweight Charts uses `time` as primary key, changing it creates a new candle
+        // Only high/low/close should update during intra-candle ticks
 
         // Update high/low/close as ticks come in
         this.currentAggregatedCandle.high = Math.max(this.currentAggregatedCandle.high, price);
