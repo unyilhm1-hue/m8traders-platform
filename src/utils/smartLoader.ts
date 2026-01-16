@@ -16,6 +16,7 @@ import type { Candle } from '@/utils/candleAggregation';
 import type { IntervalType } from '@/types/intervals';
 import { aggregateCandles } from '@/utils/candleAggregation';
 import { findBestSourceInterval } from '@/utils/dataAvailability';
+import { warmupCache } from '@/utils/warmupCache';  // 🆕 FIX 1: Cache layer
 
 const DATA_DIR = path.join(process.cwd(), 'public', 'simulation-data');
 
@@ -207,6 +208,14 @@ async function loadWarmupBuffer(
     interval: IntervalType,
     warmupCount: number
 ): Promise<Candle[]> {
+    // 🆕 FIX 1: Check cache first
+    const cached = warmupCache.get(ticker, interval);
+    if (cached && cached.length >= warmupCount) {
+        console.log(`[SmartLoader] 🚀 Cache hit: ${ticker} ${interval} (${cached.length} candles)`);
+        // Return exactly warmupCount (trim if cache has more)
+        return cached.slice(-warmupCount);
+    }
+
     const buffer: Candle[] = [];
     const startDateObj = new Date(startDate);
 
@@ -235,6 +244,11 @@ async function loadWarmupBuffer(
     // Trim to exactly warmupCount (take most recent)
     if (buffer.length > warmupCount) {
         buffer.splice(0, buffer.length - warmupCount);
+    }
+
+    // 🆕 FIX 1: Cache the loaded buffer
+    if (buffer.length > 0) {
+        warmupCache.set(ticker, interval, buffer);
     }
 
     console.log(`[SmartLoader] Warm-up buffer: ${buffer.length} candles (target: ${warmupCount})`);

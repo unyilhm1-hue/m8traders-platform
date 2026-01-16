@@ -101,7 +101,8 @@ export function isCompatible(source: Interval, target: Interval): boolean {
 
 /**
  * Calculate if there's enough data to switch to target interval
- * Rule: Must have at least 10 candles in target interval
+ * 🔥 FIX: Check both candle count AND time coverage
+ * Rule: Must have at least 10 candles in target interval AND cover 10x interval duration
  */
 export function canSwitch(
     sourceCandles: Candle[],
@@ -112,11 +113,34 @@ export function canSwitch(
         return false;
     }
 
-    const totalMinutes = sourceCandles.length * intervalToMinutes(sourceInterval);
+    if (sourceCandles.length === 0) {
+        return false;
+    }
+
     const targetMinutes = intervalToMinutes(targetInterval);
+    const requiredCount = 10;
+
+    // Check candle count (existing logic)
+    const totalMinutes = sourceCandles.length * intervalToMinutes(sourceInterval);
     const potentialCandles = Math.floor(totalMinutes / targetMinutes);
 
-    return potentialCandles >= 10;
+    if (potentialCandles < requiredCount) {
+        return false;
+    }
+
+    // 🔥 FIX: Check time coverage (new logic)
+    // Ensure data actually spans enough time, not just has enough candles
+    const firstTime = parseTime(sourceCandles[0].time);
+    const lastTime = parseTime(sourceCandles[sourceCandles.length - 1].time);
+    const spanMinutes = (lastTime - firstTime) / 60_000;
+    const requiredSpan = targetMinutes * requiredCount;
+
+    if (spanMinutes < requiredSpan) {
+        console.warn(`[Resampler] Insufficient time coverage: ${spanMinutes.toFixed(0)}m < ${requiredSpan}m required for ${targetInterval}`);
+        return false;
+    }
+
+    return true;
 }
 
 /**
@@ -170,22 +194,60 @@ function groupByTime(
     candles: Candle[],
     bucketMinutes: number
 ): Candle[][] {
-    const buckets = new Map<number, Candle[]>();
+    const allBuckets: Candle[][] = [];
+    let currentBucket: Candle[] = [];
+    let bucketStartTimestamp: number | null = null;
 
-    for (const candle of candles) {
-        const timestamp = parseTime(candle.time);
-        const bucketKey = snapToGrid(timestamp, bucketMinutes);
+    for (let i = 0; i < candles.length; i++) {
+        const candle = candles[i];
+        const currentTime = parseTime(candle.time);
+        const snappedTime = snapToGrid(currentTime, bucketMinutes);
 
-        if (!buckets.has(bucketKey)) {
-            buckets.set(bucketKey, []);
+        // Initialize bucketStartTimestamp for the first candle or after a gap
+        if (bucketStartTimestamp === null) {
+            bucketStartTimestamp = snappedTime;
         }
-        buckets.get(bucketKey)!.push(candle);
+
+        // 🔥 FIX: Gap detection - start new bucket if gap > 2x expected interval
+        // Prevents aggregating across market gaps (lunch break, overnight)
+        if (i > 0) {
+            const prevTime = parseTime(candles[i - 1].time);
+            const gap = (currentTime - prevTime) / 60_000; // Gap in minutes
+
+            // If gap > 2x bucket size, assume market closed (lunch/overnight)
+            // This condition also implies a new snappedTime, but explicitly checks for large gaps
+            if (gap > bucketMinutes * 2) {
+                // Flush current bucket before gap
+                if (currentBucket.length > 0) {
+                    allBuckets.push([...currentBucket]);
+                    currentBucket = [];
+                }
+                // Reset snap after gap, effectively starting a new aggregation sequence
+                bucketStartTimestamp = snappedTime;
+                console.log(`[Resampler] ⏭️ Gap detected: ${gap.toFixed(0)}m (> ${bucketMinutes * 2}m), starting new bucket`);
+            }
+        }
+
+        // New bucket detected (normal time progression or after a gap)
+        // If the current candle's snapped time is different from the current bucket's start time,
+        // and there are candles in the current bucket, flush it.
+        if (snappedTime !== bucketStartTimestamp && currentBucket.length > 0) {
+            allBuckets.push([...currentBucket]);
+            currentBucket = [];
+            bucketStartTimestamp = snappedTime; // Update bucket start for the new bucket
+        }
+
+        currentBucket.push(candle);
     }
 
-    // Sort buckets by time
-    return Array.from(buckets.entries())
-        .sort(([a], [b]) => a - b)
-        .map(([, candles]) => candles);
+    // Push any remaining candles in the last bucket
+    if (currentBucket.length > 0) {
+        allBuckets.push(currentBucket);
+    }
+
+    // The buckets are already ordered by time due to the iteration order.
+    // No need for an additional sort if the input candles are sorted by time.
+    return allBuckets;
 }
 
 /**
@@ -318,7 +380,8 @@ export function getAvailableIntervals(
     baseInterval: Interval,
     baseCandles: Candle[]
 ): IntervalState[] {
-    const intervals: Interval[] = ['1m', '2m', '5m', '15m', '30m', '60m'];
+    // 🔥 FIX: Expose all supported intervals including 1h/4h/1d
+    const intervals: Interval[] = ['1m', '2m', '5m', '15m', '30m', '60m', '1h', '4h', '1d'];
 
     return intervals.map(interval => {
         const compatible = isCompatible(baseInterval, interval);

@@ -582,15 +582,16 @@ function calculateTickDensity(
 
 /**
  * Distribute total volume across ticks with variance
+ * 🎯 DETERMINISTIC: Uses seeded RNG for reproducible replay
  */
-function distributeVolume(totalVolume: number, tickCount: number): number[] {
+function distributeVolume(totalVolume: number, tickCount: number, rng: SeededRandom): number[] {
     if (totalVolume === 0) {
         return Array(tickCount).fill(0);
     }
 
     const baseVolume = totalVolume / tickCount;
     const volumes = Array.from({ length: tickCount }, () => {
-        const variance = 0.7 + Math.random() * 0.6; // 0.7x - 1.3x
+        const variance = 0.7 + rng.next() * 0.6; // 0.7x - 1.3x (deterministic)
         return Math.floor(baseVolume * variance);
     });
 
@@ -626,19 +627,20 @@ function generateTickSchedule(
     nextCandle: Candle | undefined,
     pricePath: number[],
     volumePath: number[],
-    durationMs: number
+    durationMs: number,
+    rng: SeededRandom  // 🎯 DETERMINISTIC: Accept seeded RNG
 ): TickSchedule[] {
     const tickCount = pricePath.length;
     const baseDelay = durationMs / tickCount;
 
-    // Generate raw delays with cluster effect
+    // Generate raw delays with cluster effect (deterministic)
     const rawDelays: number[] = [];
     for (let i = 0; i < tickCount; i++) {
-        // 30% chance of cluster (faster burst)
-        const isCluster = Math.random() < 0.3;
+        // 30% chance of cluster (faster burst) - deterministic
+        const isCluster = rng.next() < 0.3;
         const delayMultiplier = isCluster ? 0.5 : 1.2; // Cluster = 50% delay, Normal = 120%
 
-        const variance = (Math.random() - 0.5) * baseDelay * 0.4; // ±20% variance
+        const variance = (rng.next() - 0.5) * baseDelay * 0.4; // ±20% variance (deterministic)
         rawDelays.push(baseDelay * delayMultiplier + variance);
     }
 
@@ -760,6 +762,13 @@ class SimulationEngine {
     private readonly MAX_CATCHUP_TICKS = 50;  // Allow burst catch-up
     private lastPollTime: number = 0;
     private tickBacklog: number = 0;
+
+    // 🆕 FIX 3: Performance metrics tracking
+    private totalTicksProcessed: number = 0;
+    private droppedTickCount: number = 0;
+    private tickLatencySum: number = 0;  // For averaging
+    private lastMetricsReport: number = 0;
+    private readonly METRICS_REPORT_INTERVAL = 1000; // Report every 1s
 
     private currentAggregatedCandle: {
         time: number;
@@ -987,6 +996,10 @@ class SimulationEngine {
         const candle = this.candles[this.currentCandleIndex];
         if (!candle) return;
 
+        // 🔥 FIX A: Lock time to CURRENT candle, not next
+        // This prevents timestamp jumping when worker sends updates
+        const candleTime = Math.floor(candle.t / 1000);
+
         // 🔥 SEAMLESS TRANSITION: Check if current.open === previous.close
         const prevCandle = this.currentCandleIndex > 0 ? this.candles[this.currentCandleIndex - 1] : null;
         const startPrice = candle.o;
@@ -999,21 +1012,31 @@ class SimulationEngine {
             console.log(`[SimWorker] 📊 Gap detected: ${prevCandle.c} → ${candle.o}`);
         }
 
+        // 🔥 FIX C: Lock open to prevent mutation during bar progression
         this.currentAggregatedCandle = {
-            time: Math.floor(candle.t / 1000),
-            open: startPrice,
+            time: candleTime,                // Locked to current candle start
+            open: startPrice,                // Locked to candle open (never changes)
             high: startPrice,
             low: startPrice,
             close: startPrice,
         };
+
+        console.log(`[SimWorker] 🕐 Initialized candle: time=${candleTime}, open=${startPrice.toFixed(2)} (LOCKED)`);
     }
 
     private updateAggregatedCandle(price: number) {
         if (!this.currentAggregatedCandle) return;
 
+        // 🔥 FIX C: Open and time are IMMUTABLE during bar progression
+        // Only update high/low/close to prevent candle "jumping" or "resetting"
         this.currentAggregatedCandle.high = Math.max(this.currentAggregatedCandle.high, price);
         this.currentAggregatedCandle.low = Math.min(this.currentAggregatedCandle.low, price);
         this.currentAggregatedCandle.close = price;
+
+        // Validate OHLC integrity (paranoid guard)
+        if (price < this.currentAggregatedCandle.low || price > this.currentAggregatedCandle.high) {
+            console.error(`[SimWorker] ❌  OHLC violation: price=${price}, H=${this.currentAggregatedCandle.high}, L=${this.currentAggregatedCandle.low}`);
+        }
     }
 
     private startTickLoop() {
@@ -1057,12 +1080,16 @@ class SimulationEngine {
         // Calculate tick density with playback speed scaling
         const tickCount = calculateTickDensity(durationMs, candle.v, this.averageVolume, context.volatility, this.playbackSpeed);
 
+        // 🎯 DETERMINISTIC: Create seeded RNG for this candle (for volume + schedule)
+        const seed = candle.t + this.currentCandleIndex * 1000;
+        const rng = new SeededRandom(seed);
+
         // Generate organic path with context-aware noise
         const pricePath = generateOrganicPath(candle, this.currentCandleIndex, pattern, context, tickCount);  // 🎯 Pass currentCandleIndex for seed
-        const volumePath = distributeVolume(candle.v, tickCount);
+        const volumePath = distributeVolume(candle.v, tickCount, rng);  // 🎯 Pass RNG
 
         // Generate normalized schedule
-        this.tickSchedule = generateTickSchedule(candle, nextCandle, pricePath, volumePath, durationMs);
+        this.tickSchedule = generateTickSchedule(candle, nextCandle, pricePath, volumePath, durationMs, rng);  // 🎯 Pass RNG
         this.currentTickIndex = 0;
 
         this.candleStartTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -1119,6 +1146,12 @@ class SimulationEngine {
 
             // Adaptive throttle with catch-up
             if (ticksFiredThisPoll >= maxTicksThisPoll) {
+                // 🆕 FIX 3: Track dropped ticks
+                const remainingTicks = this.tickSchedule.length - this.currentTickIndex;
+                if (remainingTicks > 0 && !wasThrottled) {
+                    this.droppedTickCount += (remainingTicks - ticksFiredThisPoll);
+                }
+
                 if (wasThrottled) {
                     console.log(`[SimWorker] 🚀 Catch-up mode: processed ${ticksFiredThisPoll} ticks, ${this.tickBacklog} remaining`);
                 } else {
@@ -1130,6 +1163,7 @@ class SimulationEngine {
             this.fireTick(tick);
             this.currentTickIndex++;
             ticksFiredThisPoll++;
+            this.totalTicksProcessed++;  // 🆕 FIX 3: Track total processed
         }
 
         // 🔥 FIX 3: Send continuous candle updates even when ticks are throttled
@@ -1137,6 +1171,13 @@ class SimulationEngine {
         if (this.currentAggregatedCandle && timeSinceLastUpdate >= this.CANDLE_UPDATE_INTERVAL) {
             this.sendCandleUpdate('continuous');
             this.lastCandleUpdateTime = now;
+        }
+
+        // 🆕 FIX 3: Report metrics periodically
+        const timeSinceMetrics = now - this.lastMetricsReport;
+        if (timeSinceMetrics >= this.METRICS_REPORT_INTERVAL) {
+            this.reportMetrics();
+            this.lastMetricsReport = now;
         }
 
         // Check if candle complete
@@ -1189,6 +1230,25 @@ class SimulationEngine {
         postMessage({
             type: 'CANDLE_UPDATE',
             candle: this.currentAggregatedCandle
+        });
+    }
+
+    /**
+     * 🆕 FIX 3: Report performance metrics to main thread
+     */
+    private reportMetrics() {
+        const avgLatency = this.totalTicksProcessed > 0
+            ? this.tickLatencySum / this.totalTicksProcessed
+            : 0;
+
+        postMessage({
+            type: 'METRICS',
+            data: {
+                tickBacklog: this.tickBacklog,
+                totalTicksProcessed: this.totalTicksProcessed,
+                droppedTickCount: this.droppedTickCount,
+                avgTickLatency: avgLatency
+            }
         });
     }
 

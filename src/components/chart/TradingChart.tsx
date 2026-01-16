@@ -25,6 +25,7 @@ export const TradingChart = memo(function TradingChart({ className = '' }: Tradi
 
     // Ref untuk mencegah reload history yang tidak perlu
     const historyLoadedRef = useRef<number>(0);
+    const lastLoadedIntervalRef = useRef<string>('');  // 🔥 FIX: Track interval changes
 
     // ✅ Refs for realtime update batching (must be at top-level)
     const lastUpdateTimeRef = useRef<number>(0);
@@ -95,15 +96,19 @@ export const TradingChart = memo(function TradingChart({ className = '' }: Tradi
         if (!candleHistory || candleHistory.length === 0) return;
         if (!candleSeriesRef.current || !mainChartRef.current) return;
 
-        // Cek apakah data ini sudah pernah dimuat?
-        // Jika timestamp terakhir sama, berarti ini data yang sama (cuma re-render React)
+        // 🔥 FIX: Check both timestamp AND interval
+        // Prevents stale data when switching intervals with same last timestamp
+        const currentInterval = useSimulationStore.getState().baseInterval;
         const lastCandleTime = candleHistory[candleHistory.length - 1].time;
-        if (historyLoadedRef.current === lastCandleTime) {
+
+        if (historyLoadedRef.current === lastCandleTime &&
+            lastLoadedIntervalRef.current === currentInterval) {
+            // console.log(`[Chart] ⏩ Skipping reload - same data (${currentInterval})`);
             return; // ⛔ STOP! Jangan load ulang.
         }
 
         try {
-            console.log(`[Chart] 📥 Loading History (${candleHistory.length} candles)...`);
+            console.log(`[Chart] 📥 Loading History (${candleHistory.length} candles, interval: ${currentInterval})...`);
 
             // ✅ FIX: Reset time guard saat load history baru
             // Prevent rejection of first updates from new simulation
@@ -128,9 +133,10 @@ export const TradingChart = memo(function TradingChart({ className = '' }: Tradi
                 to: candleHistory.length - 1
             });
 
-            // Tandai sudah dimuat
+            // 🔥 FIX: Update BOTH guards (timestamp AND interval)
             historyLoadedRef.current = lastCandleTime as number;
-            console.log(`[Chart] ✅ History loaded, showing last ${barCount} candles`);
+            lastLoadedIntervalRef.current = currentInterval;
+            console.log(`[Chart] ✅ History loaded, showing last ${barCount} candles (${currentInterval})`);
 
         } catch (error) {
             console.error('[Chart] History Load Error:', error);

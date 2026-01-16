@@ -4,6 +4,12 @@ import path from 'path';
 
 export const dynamic = 'force-dynamic';
 
+// 🔥 FIX: In-memory cache with LRU eviction
+type CacheEntry = { data: ParsedCandle[]; timestamp: number };
+const dataCache = new Map<string, CacheEntry>();
+const MAX_CACHE_SIZE = 10;
+const CACHE_TTL_MS = 60_000; // 1 minute TTL
+
 // ============================================================================
 // 🆕 Phase 2: Multi-Timeframe Aggregation Functions
 // ============================================================================
@@ -19,41 +25,76 @@ type ParsedCandle = {
 
 /**
  * 🆕 Detect actual data interval from timestamps
+ * 🔥 FIX: Use MEDIAN instead of average for robustness against gaps
  * Returns interval in minutes
  */
 function detectDataInterval(candles: ParsedCandle[]): number {
-    if (candles.length < 2) return 1;
+    if (candles.length < 10) return 60; // Default 1h
 
-    // Sample first 10 candle intervals
-    const diffs = candles.slice(0, Math.min(10, candles.length - 1)).map((c, i) =>
-        candles[i + 1].t - c.t
-    ).filter(d => d > 0);
+    // Sample larger set for better accuracy
+    const diffs: number[] = [];
+    for (let i = 1; i < Math.min(50, candles.length); i++) {
+        const diff = (candles[i].t - candles[i - 1].t) / 60_000; // Convert to minutes
+        // Ignore overnight gaps (> 1 day)
+        if (diff < 1440) {
+            diffs.push(diff);
+        }
+    }
 
-    if (diffs.length === 0) return 1;
+    if (diffs.length === 0) return 60;
 
-    const avgDiff = diffs.reduce((sum, d) => sum + d, 0) / diffs.length;
-    const intervalMinutes = Math.round(avgDiff / 60000); // Convert ms to minutes
+    // Calculate MEDIAN (robust to outliers)
+    diffs.sort((a, b) => a - b);
+    const median = diffs[Math.floor(diffs.length / 2)];
+    const intervalMinutes = Math.round(median);
 
-    console.log(`[Aggregation] Detected interval: ${intervalMinutes}m (avg diff: ${avgDiff}ms)`);
+    console.log(`[Aggregation] Detected interval: ${intervalMinutes}m (median of ${diffs.length} diffs, range: ${Math.min(...diffs).toFixed(0)}-${Math.max(...diffs).toFixed(0)}m)`);
 
     return intervalMinutes;
 }
 
 /**
  * 🆕 Create aggregated candle from bucket
+ * 🔥 FIX E: Sort bucket before aggregating to ensure chronologically correct close
+ * 🔥 FIX: Add partial flag for incomplete buckets
  */
 function createAggregatedCandle(
     bucket: ParsedCandle[],
-    startTime: number
-): ParsedCandle {
-    return {
+    startTime: number,
+    isPartial: boolean = false
+): ParsedCandle & { partial?: boolean } {
+    // 🔥 FIX E: Sort bucket by timestamp to ensure OHLC chronological correctness
+    // Prevents "close" being from middle of bucket if data is unordered
+    const sortedBucket = [...bucket].sort((a, b) => a.t - b.t);
+
+    // Validate bucket has no major gaps
+    if (sortedBucket.length > 1) {
+        const firstTime = sortedBucket[0].t;
+        const lastTime = sortedBucket[sortedBucket.length - 1].t;
+        const span = lastTime - firstTime;
+        const avgInterval = sortedBucket.length > 1 ? span / (sortedBucket.length - 1) : 0;
+
+        // Warn if bucket span is suspiciously large (possible gap)
+        if (avgInterval > 60 * 60 * 1000) { // > 1 hour between candles
+            console.warn(`[Aggregation] ⚠️ Large gap in bucket: span=${(span / 60000).toFixed(0)}m, count=${sortedBucket.length}`);
+        }
+    }
+
+    const result: ParsedCandle & { partial?: boolean } = {
         t: startTime,
-        o: bucket[0].o,                             // First open
-        h: Math.max(...bucket.map(c => c.h)),       // Max high
-        l: Math.min(...bucket.map(c => c.l)),       // Min low
-        c: bucket[bucket.length - 1].c,             // Last close
-        v: bucket.reduce((sum, c) => sum + c.v, 0)  // Sum volume
+        o: sortedBucket[0].o,                             // FIRST open (chronological)
+        h: Math.max(...sortedBucket.map(c => c.h)),       // Max high
+        l: Math.min(...sortedBucket.map(c => c.l)),       // Min low
+        c: sortedBucket[sortedBucket.length - 1].c,       // LAST close (chronological)
+        v: sortedBucket.reduce((sum, c) => sum + c.v, 0)  // Sum volume
     };
+
+    // 🔥 FIX: Add partial metadata
+    if (isPartial) {
+        result.partial = true;
+    }
+
+    return result;
 }
 
 /**
@@ -83,6 +124,9 @@ function aggregateCandles(
     let bucket: ParsedCandle[] = [];
     let bucketStartTime: number | null = null;
 
+    // Calculate expected candles per bucket for partial detection
+    const expectedCount = targetIntervalMinutes / dataInterval;
+
     candles.forEach((candle, idx) => {
         // Calculate which bucket this candle belongs to
         const candleBucket = Math.floor(candle.t / targetIntervalMs) * targetIntervalMs;
@@ -101,9 +145,16 @@ function aggregateCandles(
 
         bucket.push(candle);
 
-        // Last candle - flush bucket
+        // 🔥 FIX: Last candle - mark as partial if incomplete
         if (idx === candles.length - 1 && bucket.length > 0) {
-            aggregated.push(createAggregatedCandle(bucket, bucketStartTime!));
+            const isLastBucket = true;
+            const isPartial = isLastBucket && (bucket.length < expectedCount * 0.9); // 90% threshold
+
+            if (isPartial) {
+                console.log(`[Aggregation] 🏷️ Marking last bucket as partial (${bucket.length}/${expectedCount.toFixed(0)} candles)`);
+            }
+
+            aggregated.push(createAggregatedCandle(bucket, bucketStartTime!, isPartial));
         }
     });
 
@@ -118,6 +169,33 @@ function aggregateCandles(
 
 export async function GET(request: Request) {
     try {
+        // 🔥 FIX: Cache key based on ticker + interval
+        const { searchParams } = new URL(request.url);
+        const requestedTicker = searchParams.get('ticker') || 'ASII';
+        const requestedInterval = searchParams.get('interval') || '1m';
+        const requestedDate = searchParams.get('date');
+
+        const cacheKey = `${requestedTicker}_${requestedInterval}_${requestedDate || 'any'}`;
+
+        // 🔥 FIX: Check cache first
+        const cached = dataCache.get(cacheKey);
+        if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+            console.log(`[API] ✅ Cache HIT for ${cacheKey}`);
+            return NextResponse.json({
+                success: true,
+                data: {
+                    ticker: requestedTicker,
+                    candles: cached.data,
+                    metadata: {
+                        cached: true,
+                        cacheAge: Math.floor((Date.now() - cached.timestamp) / 1000)
+                    }
+                }
+            });
+        }
+
+        console.log(`[API] 🔍 Cache MISS for ${cacheKey}, loading from disk...`);
+
         const dataDir = path.join(process.cwd(), 'public', 'simulation-data');
 
         if (!fs.existsSync(dataDir)) {
@@ -128,14 +206,6 @@ export async function GET(request: Request) {
         if (files.length === 0) {
             return NextResponse.json({ error: 'No files' }, { status: 404 });
         }
-
-        // Parse query params for specific ticker, date, and interval request
-        const { searchParams } = new URL(request.url);
-
-        // ✅ NEW: Accept ticker and date params (with smart defaults for backward compat)
-        const requestedTicker = searchParams.get('ticker') || 'ASII'; // Default to ASII
-        const requestedDate = searchParams.get('date'); // Optional (null = any date)
-        const requestedInterval = searchParams.get('interval') || '1m'; // Default to 1m
 
         // Clean ticker (remove .JK suffix)
         const cleanTicker = requestedTicker.replace('.JK', '').replace('.', '_');
@@ -397,6 +467,21 @@ export async function GET(request: Request) {
                 }
             },
         });
+
+        // 🔥 FIX: Cache result before return (with LRU eviction)
+        if (dataCache.size >= MAX_CACHE_SIZE) {
+            // Find oldest entry and remove it
+            const oldest = Array.from(dataCache.entries())
+                .sort((a, b) => a[1].timestamp - b[1].timestamp)[0];
+            dataCache.delete(oldest[0]);
+            console.log(`[API] 🗑️ Cache evicted: ${oldest[0]}`);
+        }
+
+        dataCache.set(cacheKey, {
+            data: processedCandles as ParsedCandle[],
+            timestamp: Date.now()
+        });
+        console.log(`[API] 💾 Cached: ${cacheKey} (${dataCache.size}/${MAX_CACHE_SIZE})`);
 
     } catch (error) {
         console.error('[API] Error:', error);

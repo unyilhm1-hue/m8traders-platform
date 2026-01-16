@@ -4,7 +4,7 @@
  */
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useChartStore } from '@/stores';
 import { generateAdvancedMetrics } from '@/lib/market';
 import type { AdvancedMetrics } from '@/types/market';
@@ -16,10 +16,11 @@ interface AdvancedMetricsProps {
 
 export function AdvancedMetricsDisplay({ currentPrice }: AdvancedMetricsProps) {
     const { replayData, currentCandle, ticker } = useChartStore();
-    const [metrics, setMetrics] = useState<AdvancedMetrics | null>(null);
 
-    useEffect(() => {
-        if (replayData.length === 0) return;
+    // 🔥 FIX: Use useMemo instead of useEffect to prevent O(n) per tick
+    // Only recalculate when data length changes or new candle closes
+    const metrics = useMemo(() => {
+        if (replayData.length === 0) return null;
 
         // Convert replay data to format for metrics calculation
         const candles = replayData.map((candle) => ({
@@ -29,9 +30,8 @@ export function AdvancedMetricsDisplay({ currentPrice }: AdvancedMetricsProps) {
             v: candle.v || 100000, // default volume if not present
         }));
 
-        const calculatedMetrics = generateAdvancedMetrics(candles);
-        setMetrics(calculatedMetrics);
-    }, [replayData, currentCandle]); // Recalculate when candle updates
+        return generateAdvancedMetrics(candles);
+    }, [replayData.length, currentCandle?.time]); // Recalc only on new candle or data change
 
     if (!metrics) {
         return (

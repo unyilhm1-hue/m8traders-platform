@@ -67,7 +67,8 @@ interface SimulationState {
     simulationCandles: WorkerCandle[]; // Candles for selected date (simulation queue)
 
     // 🆕 Master Blueprint: Data Layer & Resampling
-    baseInterval: Interval;             // Current base interval (e.g., '1m', '5m')
+    baseInterval: Interval;             // Currently displayed interval (e.g., '1m', '5m')
+    sourceInterval: Interval;           // 🔥 FIX: Original data interval (immutable until reload)
     baseData: ResamplerCandle[];        // Original data at base interval (King)
     bufferData: ResamplerCandle[];      // Historical buffer for indicators
     cachedIntervals: Map<Interval, ResamplerCandle[]>;  // Resampled intervals cache
@@ -96,6 +97,15 @@ interface SimulationState {
         filterEnabled: boolean;  // true = filter to market hours, false = accept all
     };
 
+    // 🆕 FIX 3: Performance Metrics (Observability)
+    metrics: {
+        tickBacklog: number;         // Current tick backlog count
+        totalTicksProcessed: number; // Cumulative ticks since start
+        droppedTickCount: number;    // Ticks dropped due to throttling
+        avgTickLatency: number;      // Average ms between tick gen and render
+        lastUpdateTime: number;      // Last metrics update timestamp
+    };
+
     // Actions
     pushTick: (tick: TickData) => void;
     setCandleHistory: (candles: WorkerCandle[]) => void; // Set initial history from worker
@@ -106,11 +116,19 @@ interface SimulationState {
     setMarketConfig: (config: Partial<SimulationState['marketConfig']>) => void; // ✅ FIX 2: New action
     setLastProcessedIndex: (index: number) => void; // ✅ Phoenix Pattern: Update progress
 
+    // 🔥 FIX: Tick batching state
+    tickBatchQueue: TickData[];
+    tickBatchScheduled: boolean;
+
     // 🆕 Master Blueprint: New Actions
     loadWithSmartBuffer: (ticker: string, startDate: Date, interval: Interval) => Promise<void>;
     switchInterval: (targetInterval: Interval) => ResamplerCandle[];
     getIntervalStates: () => IntervalState[];
     clearIntervalCache: () => void;
+
+    // 🆕 FIX 3: Metrics actions
+    updateMetrics: (metrics: Partial<SimulationState['metrics']>) => void;
+    resetMetrics: () => void;
 }
 
 // ============================================================================
@@ -135,6 +153,7 @@ const initialState = {
 
     // 🆕 Master Blueprint: Data Layer defaults
     baseInterval: '1m' as Interval,
+    sourceInterval: '1m' as Interval,  // 🔥 FIX: Track original data interval
     baseData: [] as ResamplerCandle[],
     bufferData: [] as ResamplerCandle[],
     cachedIntervals: new Map<Interval, ResamplerCandle[]>(),
@@ -152,12 +171,25 @@ const initialState = {
     // ✅ Phoenix Pattern: Start at index 0
     lastProcessedIndex: 0,
 
+    // 🔥 FIX: Tick batching defaults
+    tickBatchQueue: [] as TickData[],
+    tickBatchScheduled: false,
+
     // ✅ FIX 2: Default market config (WIB, 09-16, filter enabled)
     marketConfig: {
         timezone: 'Asia/Jakarta',
         openHour: 9,
         closeHour: 16,
         filterEnabled: true  // Default: filter enabled for IDX market
+    },
+
+    // 🆕 FIX 3: Performance metrics initial state
+    metrics: {
+        tickBacklog: 0,
+        totalTicksProcessed: 0,
+        droppedTickCount: 0,
+        avgTickLatency: 0,
+        lastUpdateTime: 0
     },
 };
 
@@ -333,52 +365,76 @@ export const useSimulationStore = create<SimulationState>()(
     immer((set) => ({
         ...initialState,
 
+        // 🔥 FIX: Batch tick updates using requestAnimationFrame
+        // Only update orderbook/trades once per frame (~60fps max)
         pushTick(tick) {
             set((state) => {
-                const lastPrice = state.currentPrice;
-                const currentPrice = tick.price;
+                // Always queue tick for batching
+                state.tickBatchQueue.push(tick);
 
-                // Update tick state
-                state.currentTick = tick;
-                state.tickHistory.push(tick);
+                // Schedule batch flush if not already scheduled
+                if (!state.tickBatchScheduled) {
+                    state.tickBatchScheduled = true;
 
-                // Trim history
-                if (state.tickHistory.length > state.maxTickHistory) {
-                    state.tickHistory.shift();
-                }
+                    requestAnimationFrame(() => {
+                        const batch = useSimulationStore.getState().tickBatchQueue;
+                        if (batch.length === 0) return;
 
-                // Update price state
-                state.lastPrice = lastPrice;
-                state.currentPrice = currentPrice;
+                        // Process ONLY the latest tick (most recent state)
+                        const latestTick = batch[batch.length - 1];
 
-                if (lastPrice > 0) {
-                    state.priceChange = currentPrice - lastPrice;
-                    state.priceChangePercent = (state.priceChange / lastPrice) * 100;
-                }
+                        set((state) => {
+                            const lastPrice = state.currentPrice;
+                            const currentPrice = latestTick.price;
 
-                // Update cumulative volume
-                state.cumulativeVolume += tick.volume;
+                            // Update tick state (with latest)
+                            state.currentTick = latestTick;
+                            state.tickHistory.push(latestTick);
 
-                // Generate synthetic orderbook
-                const { bids, asks } = generateOrderbook(currentPrice, state.orderbookDepth);
-                state.orderbookBids = bids;
-                state.orderbookAsks = asks;
+                            // Trim history
+                            if (state.tickHistory.length > state.maxTickHistory) {
+                                state.tickHistory.shift();
+                            }
 
-                // Add to time & sales
-                if (tick.volume > 0) {
-                    const trade: TradeRecord = {
-                        price: currentPrice,
-                        volume: tick.volume,
-                        timestamp: tick.timestamp,
-                        side: determineTradeSide(currentPrice, lastPrice),
-                    };
+                            // Update price state
+                            state.lastPrice = lastPrice;
+                            state.currentPrice = currentPrice;
 
-                    state.recentTrades.unshift(trade); // Add to front
+                            if (lastPrice > 0) {
+                                state.priceChange = currentPrice - lastPrice;
+                                state.priceChangePercent = (state.priceChange / lastPrice) * 100;
+                            }
 
-                    // Trim trade history
-                    if (state.recentTrades.length > state.maxTradeHistory) {
-                        state.recentTrades.pop();
-                    }
+                            // Update cumulative volume
+                            state.cumulativeVolume += latestTick.volume;
+
+                            // 🔥 BATCHED: Generate orderbook ONCE per frame
+                            const { bids, asks } = generateOrderbook(currentPrice, state.orderbookDepth);
+                            state.orderbookBids = bids;
+                            state.orderbookAsks = asks;
+
+                            // 🔥 BATCHED: Add to time & sales ONCE per frame
+                            if (latestTick.volume > 0) {
+                                const trade: TradeRecord = {
+                                    price: currentPrice,
+                                    volume: latestTick.volume,
+                                    timestamp: latestTick.timestamp,
+                                    side: determineTradeSide(currentPrice, lastPrice),
+                                };
+
+                                state.recentTrades.unshift(trade);
+
+                                // Trim trade history
+                                if (state.recentTrades.length > state.maxTradeHistory) {
+                                    state.recentTrades.pop();
+                                }
+                            }
+
+                            // Clear batch queue
+                            state.tickBatchQueue = [];
+                            state.tickBatchScheduled = false;
+                        });
+                    });
                 }
             });
         },
@@ -421,33 +477,38 @@ export const useSimulationStore = create<SimulationState>()(
                 // Sortir paksa di store untuk menjamin urutan
                 converted.sort((a, b) => a.time - b.time);
 
-                // 🔥 FIX B: Deduplicate timestamps to prevent "barcode" effect
-                // Merge candles with same timestamp (take last OHLC values)
+                // 🔥 FIX D: Safe deduplication with chronological OHLC merge
+                // Group consecutive candles with same timestamp, then merge properly
                 const deduplicated: ChartCandle[] = [];
-                for (let i = 0; i < converted.length; i++) {
-                    const current = converted[i];
+                let i = 0;
 
-                    // Check if next candle has same timestamp
-                    if (i < converted.length - 1 && converted[i + 1].time === current.time) {
-                        // Skip this, will be merged with next
-                        continue;
+                while (i < converted.length) {
+                    const currentTime = converted[i].time;
+                    const duplicates: ChartCandle[] = [converted[i]];
+
+                    // Collect all candles with same timestamp
+                    let j = i + 1;
+                    while (j < converted.length && converted[j].time === currentTime) {
+                        duplicates.push(converted[j]);
+                        j++;
                     }
 
-                    // If previous had same time, this is the duplicate - use this one's OHLC
-                    if (i > 0 && converted[i - 1].time === current.time) {
-                        // Replace deduplicated's last entry (merge)
-                        const merged = {
-                            time: current.time,
-                            open: converted[i - 1].open,  // Keep first open
-                            high: Math.max(converted[i - 1].high, current.high),  // Max high
-                            low: Math.min(converted[i - 1].low, current.low),      // Min low
-                            close: current.close,                                   // Use last close
+                    if (duplicates.length > 1) {
+                        // Merge: first open, max high, min low, last close
+                        const merged: ChartCandle = {
+                            time: currentTime,
+                            open: duplicates[0].open,                              // FIRST open
+                            high: Math.max(...duplicates.map(c => c.high)),        // MAX high
+                            low: Math.min(...duplicates.map(c => c.low)),          // MIN low
+                            close: duplicates[duplicates.length - 1].close,        // LAST close
                         };
-                        deduplicated[deduplicated.length - 1] = merged;
+                        deduplicated.push(merged);
                     } else {
-                        // No duplicate, add as-is
-                        deduplicated.push(current);
+                        // No duplicates, add as-is
+                        deduplicated.push(duplicates[0]);
                     }
+
+                    i = j; // Skip to next unique timestamp
                 }
 
                 const originalCount = converted.length;
@@ -653,6 +714,7 @@ export const useSimulationStore = create<SimulationState>()(
                 set((state) => {
                     state.currentTicker = ticker;
                     state.baseInterval = interval;
+                    state.sourceInterval = interval;  // 🔥 FIX: Set source interval on load
                     state.baseData = [...cached.buffer, ...cached.active];
                     state.bufferData = cached.buffer;
                     state.cachedIntervals.clear(); // Reset cache when loading new data
@@ -660,6 +722,7 @@ export const useSimulationStore = create<SimulationState>()(
                 });
 
                 console.log(`[Store] ✅ Loaded ${cached.buffer.length} buffer + ${cached.active.length} active candles`);
+                console.log(`[Store] 📊 sourceInterval set to: ${interval}`);
             } catch (error) {
                 console.error('[Store] ❌ Failed to load with smart buffer:', error);
                 throw error;
@@ -678,6 +741,7 @@ export const useSimulationStore = create<SimulationState>()(
                 // 🚀 FIX 2: Sync state, chart, and worker
                 set((state) => {
                     state.baseInterval = targetInterval;
+                    // sourceInterval stays unchanged - it's the original data interval
                     // Update chart history with resampled candles
                     // 🔥 FIX: Don't divide if time is already in seconds (< 10 billion)
                     state.candleHistory = cached.map((c: ResamplerCandle) => {
@@ -698,22 +762,34 @@ export const useSimulationStore = create<SimulationState>()(
                 return cached;
             }
 
-            // Resample from base data
+            // 🔥 FIX: Resample from SOURCE interval, not current baseInterval
+            // This prevents "incompatible interval" errors when switching 1m→5m→1m
             try {
+                console.log(`[Store] 🔄 Resampling: ${state.sourceInterval} (source) → ${targetInterval}`);
+
                 const resampled = resampleCandles(
                     state.baseData,
-                    state.baseInterval,
+                    state.sourceInterval,  // 🔥 FIX: Use SOURCE, not baseInterval
                     targetInterval
                 );
 
                 // Cache result and sync state
                 set((state) => {
                     state.cachedIntervals.set(targetInterval, resampled);
-                    state.baseInterval = targetInterval;
+                    state.baseInterval = targetInterval;  // Update displayed interval
+                    // sourceInterval UNCHANGED - still points to original data
 
-                    // Update chart history with resampled candles
+                    // 🔥 FIX: Filter out partial candles before charting
+                    const completeCandles = resampled.filter(c => !c.metadata?.isPartial);
+                    const filteredCount = resampled.length - completeCandles.length;
+
+                    if (filteredCount > 0) {
+                        console.log(`[Store] 🗑️ Filtered ${filteredCount} partial candle(s)`);
+                    }
+
+                    // Update chart history with resampled candles (without partials)
                     // 🔥 FIX: Don't divide if time is already in seconds
-                    state.candleHistory = resampled.map((c: ResamplerCandle) => {
+                    state.candleHistory = completeCandles.map((c: ResamplerCandle) => {
                         const timeInMs = typeof c.time === 'number' ? c.time : new Date(c.time).getTime();
                         const timeInSeconds = timeInMs > 10_000_000_000 ? timeInMs / 1000 : timeInMs;
 
@@ -727,7 +803,7 @@ export const useSimulationStore = create<SimulationState>()(
                     });
                 });
 
-                console.log(`[Store] ✅ Resampled ${state.baseInterval} → ${targetInterval} (${resampled.length} candles)`);
+                console.log(`[Store] ✅ Resampled ${state.sourceInterval} → ${targetInterval} (${resampled.length} candles)`);
                 console.log(`[Store] 📊 Chart updated with resampled data`);
                 return resampled;
             } catch (error) {
@@ -747,6 +823,31 @@ export const useSimulationStore = create<SimulationState>()(
             set((state) => {
                 state.cachedIntervals.clear();
                 console.log('[Store] 🗑️ Interval cache cleared');
+            });
+        },
+
+        // 🆕 FIX 3: Update performance metrics
+        updateMetrics(metrics) {
+            set((state) => {
+                state.metrics = {
+                    ...state.metrics,
+                    ...metrics,
+                    lastUpdateTime: Date.now()
+                };
+            });
+        },
+
+        // 🆕 FIX 3: Reset performance metrics
+        resetMetrics() {
+            set((state) => {
+                state.metrics = {
+                    tickBacklog: 0,
+                    totalTicksProcessed: 0,
+                    droppedTickCount: 0,
+                    avgTickLatency: 0,
+                    lastUpdateTime: 0
+                };
+                console.log('[Store] 📊 Metrics reset');
             });
         },
     }))
