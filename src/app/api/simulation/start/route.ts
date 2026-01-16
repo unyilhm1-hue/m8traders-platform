@@ -85,11 +85,22 @@ export async function GET(request: Request) {
         const ticker = selectedFile.split('_')[0] || 'UNKNOWN';
 
         // ✅ Extract date from filename (for HH:MM-only format support)
-        // Format: "TICKER_YYYY-MM-DD.json" or "TICKER_full_30days.json"
+        // Supports BOTH patterns:
+        //   - "TICKER_YYYY-MM-DD.json" (legacy) → date at index 1
+        //   - "TICKER_INTERVAL_YYYY-MM-DD.json" (new) → date at index 2
         const filenameParts = selectedFile.replace('.json', '').split('_');
-        const dateFromFilename = filenameParts.length >= 2 && filenameParts[1].match(/^\d{4}-\d{2}-\d{2}$/)
-            ? filenameParts[1]
-            : null;
+        let dateFromFilename: string | null = null;
+
+        // Check each part for date pattern YYYY-MM-DD
+        for (const part of filenameParts) {
+            if (part.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                dateFromFilename = part;
+                break;
+            }
+        }
+
+        console.log(`[API/Start] 📅 Extracted date from filename: ${dateFromFilename || 'NONE'}`);
+
 
         // --- DATA PROCESSING WITH FORMAT DETECTION ---
         // ✅ Calculate interval multiplier for timestamp adjustment
