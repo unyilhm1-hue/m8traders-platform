@@ -128,9 +128,22 @@ function SimDemoPageContent() {
             return;
         }
 
-        console.log('[SimDemoPage] Worker ready, starting smart buffering initialization...');
-        initSimulation();
-        hasInitialized.current = true;
+        console.log('[SimDemoPage] Worker ready, deferring initialization for better UX...');
+
+        // 🚀 PERFORMANCE FIX: Defer heavy data loading until browser is idle
+        // This prevents blocking initial render and makes UI feel more responsive
+        if (typeof requestIdleCallback !== 'undefined') {
+            requestIdleCallback(() => {
+                initSimulation();
+                hasInitialized.current = true;
+            }, { timeout: 2000 }); // Fallback after 2s if browser stays busy
+        } else {
+            // Fallback for browsers without requestIdleCallback (Safari)
+            setTimeout(() => {
+                initSimulation();
+                hasInitialized.current = true;
+            }, 100);
+        }
     }, [isReady, engine, selectedTicker]); // 🔥 UPDATED: Added selectedTicker dependency to reload when ticker changes
 
     // ✅ FIX: Event-driven auto-play (no race condition)
