@@ -5,6 +5,7 @@
 'use client';
 
 import { SimulationControls } from '@/components/simulation/SimulationControls';
+import { TickerSelector } from '@/components/simulation/TickerSelector';  // 🔥 NEW
 import { AverageCalculator } from './AverageCalculator';
 import { ScenarioSelector } from '@/components/replay/ScenarioSelector';
 import { Select } from '@/components/ui/Select';
@@ -85,13 +86,10 @@ export function CompactToolbar() {
         <div className="glassmorphism border-b border-[var(--bg-subtle-border)] px-4 z-40 relative">
             {/* Single Row: All Controls */}
             <div className="h-[56px] flex items-center gap-2 overflow-x-auto no-scrollbar">
-                {/* Symbol Selector */}
-                <Select
-                    value={ticker}
-                    onChange={setTicker}
-                    options={tickerOptions}
-                    className="w-[120px]"
-                    triggerClassName="font-bold text-[var(--text-primary)]"
+                {/* 🔥 NEW: Dynamic Ticker Selector (replaces hardcoded Select) */}
+                <TickerSelector
+                    selectedTicker={ticker}
+                    onTickerChange={setTicker}
                 />
 
                 <div className="w-px h-5 bg-[var(--bg-tertiary)] mx-2" />

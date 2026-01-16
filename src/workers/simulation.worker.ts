@@ -1,11 +1,12 @@
 /**
- * Simulation Worker
- * Background thread for tick-by-tick simulation
- * Ports existing pricePathGenerator logic to Web Worker context
+ * Simulation Worker - Context-Aware & Pattern-Driven Pathfinding Engine
+ * Implements organic price movement with pattern recognition and market microstructure
+ * 
+ * @see .agent/skills/backend-skills/quant-dev.md for design principles
  */
 
 // ============================================================================
-// Type Definitions (copied from main thread types)
+// Type Definitions
 // ============================================================================
 
 interface Candle {
@@ -27,10 +28,19 @@ interface TickData {
 
 interface WorkerMessage {
     type: 'INIT_DATA' | 'PLAY' | 'PAUSE' | 'STOP' | 'SET_SPEED' | 'SEEK' | 'CALCULATE_INDICATOR';
+
+    // Smart buffering support (NEW)
+    historyBuffer?: Candle[];       // Past 200 candles for warm-up
+    simulationQueue?: Candle[];     // Future candles to animate
+    interval?: string;               // Target interval (1m, 5m, etc)
+
+    // Legacy support (backward compatible)
     candles?: Candle[];
-    speed?: number; // 1 = realtime, 2 = 2x speed, etc.
-    index?: number; // for SEEK
-    indicator?: IndicatorRequest; // for CALCULATE_INDICATOR
+
+    // Playback controls
+    speed?: number;
+    index?: number;
+    indicator?: IndicatorRequest;
 }
 
 interface IndicatorRequest {
@@ -49,103 +59,133 @@ interface IndicatorResult {
 interface VolumeResult {
     time: number;
     value: number;
-    color: string; // 'green' for bullish, 'red' for bearish
-}
-
-interface PriceAnchor {
-    tick: number;
-    price: number;
-}
-
-interface TickSchedule {
-    tickIndex: number;
-    targetTime: number;  // When this tick should fire (in ms from candle start)
-    price: number;
-    volume: number;
+    color: string;
 }
 
 // ============================================================================
-// 🆕 Phase 4: Pattern-Aware Pathfinding Interfaces
+// 🔥 NEW: Context-Aware Pattern Profile (Simplified)
 // ============================================================================
 
 /**
- * Candlestick pattern profile with priority hierarchy
- * Priority: Engulfing (1) > Hammer/Shooting Star (2) > Marubozu (3) > Doji (4)
+ * Strict pattern detection based on body/wick ratios only
+ * - No confidence scores or priorities
+ * - Pure binary detection with strict thresholds
  */
+type CandlePattern = 'hammer' | 'shootingStar' | 'marubozu' | 'doji' | 'neutral';
+
 interface PatternProfile {
-    type: 'bullishEngulfing' | 'bearishEngulfing' | 'hammer' | 'shootingStar' | 'marubozu' | 'doji' | 'neutral';
-    confidence: number;  // 0-1, higher = stronger pattern
-    direction: 'bullish' | 'bearish' | 'neutral';
-    priority: number;    // 1 (highest/strongest) to 4 (lowest/weakest)
-    wickRatio: number;
-    bodySize: number;
+    type: CandlePattern;
+    isBullish: boolean;
+    bodyRatio: number;    // Body size relative to range (0-1)
+    upperWickRatio: number;
+    lowerWickRatio: number;
 }
 
 /**
- * Market context from previous candles
- * Used to adjust price path behavior based on trend/volatility
+ * Market context from Multi-Timeframe Analysis
+ * Replaces simple lookback with 3-layer Mata Dewa strategy
  */
 interface MarketContext {
-    trend: 'uptrend' | 'downtrend' | 'ranging';
-    trendStrength: number;  // 0-1
-    volatility: number;      // ATR-based, >1.5 = high volatility
-    previousPattern: PatternProfile;
+    // Layer 1: Micro (pattern)
+    currentPattern: 'hammer' | 'shootingStar' | 'marubozu' | 'doji' | 'neutral';
+    patternBullish: boolean;
+
+    // Layer 2: Meso (session)
+    sessionProgress: number;
+    volumeVsAverage: number;
+
+    // Layer 3: Macro (trend from buffer)
+    trend: 'bullish' | 'bearish' | 'sideways';
+    trendStrength: number;
+    volatility: 'low' | 'medium' | 'high';
+
+    // Derived
+    isFlowAligned: boolean;
+    noiseLevel: number;      // 0.1-0.5 (context-aware noise scaling)
 }
 
 // ============================================================================
-// Market Configuration (for gap handling)
+// 🔥 NEW: Path Template System
+// ============================================================================
+
+type PathWaypoint = 'OPEN' | 'HIGH' | 'LOW' | 'CLOSE';
+
+interface PathTemplate {
+    waypoints: PathWaypoint[];
+    description: string;
+}
+
+// Define 4 organic path templates
+const PATH_TEMPLATES: PathTemplate[] = [
+    {
+        waypoints: ['OPEN', 'LOW', 'HIGH', 'CLOSE'],
+        description: 'Bearish recovery (selloff then rally)'
+    },
+    {
+        waypoints: ['OPEN', 'HIGH', 'LOW', 'CLOSE'],
+        description: 'Bullish pullback (rally then dip)'
+    },
+    {
+        waypoints: ['OPEN', 'HIGH', 'CLOSE'],
+        description: 'Strong bullish (direct rally)'
+    },
+    {
+        waypoints: ['OPEN', 'LOW', 'CLOSE'],
+        description: 'Strong bearish (direct dump)'
+    }
+];
+
+// ============================================================================
+// Market Configuration
 // ============================================================================
 
 interface MarketConfig {
     timezone: string;
     openHour: number;
     closeHour: number;
-    lunchBreakStart: number;  // 11.5 = 11:30
-    lunchBreakEnd: number;    // 13.5 = 13:30
+    lunchBreakStart: number;
+    lunchBreakEnd: number;
     filterEnabled: boolean;
 }
 
-// Default IDX (Indonesia Stock Exchange) market config
 const DEFAULT_MARKET_CONFIG: MarketConfig = {
     timezone: 'Asia/Jakarta',
     openHour: 9,
     closeHour: 16,
-    lunchBreakStart: 11.5,  // 11:30 WIB
-    lunchBreakEnd: 13.5,    // 13:30 WIB
+    lunchBreakStart: 11.5,
+    lunchBreakEnd: 13.5,
     filterEnabled: true
 };
 
+// ============================================================================
+// Utility Functions
+// ============================================================================
+
 /**
  * Validate and sanitize OHLC candle data
- * Ensures high >= max(open, close) and low <= min(open, close)
- * @returns null if candle is completely invalid (should be skipped)
  */
 function validateAndSanitizeOHLC(candle: Candle, index: number): Candle | null {
     let { o, h, l, c, t, v } = candle;
 
-    // 1. Basic null/NaN check
     if ([o, h, l, c].some(p => p === null || p === undefined || isNaN(p) || p <= 0)) {
-        console.warn(`[SimulationWorker] ⚠️ Candle ${index}: Invalid OHLC values, skipping`);
+        console.warn(`[SimWorker] ⚠️ Candle ${index}: Invalid OHLC, skipping`);
         return null;
     }
 
-    // 2. Fix high/low inversion (common data bug)
     if (h < l) {
-        console.warn(`[SimulationWorker] ⚠️ Candle ${index}: high (${h}) < low (${l}), swapping`);
+        console.warn(`[SimWorker] ⚠️ Candle ${index}: h < l, swapping`);
         [h, l] = [l, h];
     }
 
-    // 3. Ensure high >= max(open, close)
     const maxOC = Math.max(o, c);
     if (h < maxOC) {
-        console.warn(`[SimulationWorker] ⚠️ Candle ${index}: high (${h}) < max(O,C) (${maxOC}), adjusting`);
+        console.warn(`[SimWorker] ⚠️ Candle ${index}: h < max(O,C), adjusting`);
         h = maxOC;
     }
 
-    // 4. Ensure low <= min(open, close)
     const minOC = Math.min(o, c);
     if (l > minOC) {
-        console.warn(`[SimulationWorker] ⚠️ Candle ${index}: low (${l}) > min(O,C) (${minOC}), adjusting`);
+        console.warn(`[SimWorker] ⚠️ Candle ${index}: l > min(O,C), adjusting`);
         l = minOC;
     }
 
@@ -153,13 +193,7 @@ function validateAndSanitizeOHLC(candle: Candle, index: number): Candle | null {
 }
 
 /**
- * Get IDX tick size based on price
- * IDX (Indonesia Stock Exchange) tick size rules:
- * - Price < 200: tick size = 1
- * - 200 <= Price < 500: tick size = 2
- * - 500 <= Price < 2000: tick size = 5
- * - 2000 <= Price < 5000: tick size = 10
- * - Price >= 5000: tick size = 25
+ * IDX tick size rules
  */
 function getIDXTickSize(price: number): number {
     if (price < 200) return 1;
@@ -169,625 +203,359 @@ function getIDXTickSize(price: number): number {
     return 25;
 }
 
-/**
- * Round price to nearest valid IDX tick size
- */
 function roundToIDXTickSize(price: number): number {
     const tickSize = getIDXTickSize(price);
     return Math.round(price / tickSize) * tickSize;
 }
 
 /**
- * Generate realistic orderbook with IDX-compliant tick sizes
- * @param currentPrice - Current market price
- * @param spread - Bid-ask spread percentage (e.g., 0.001 = 0.1%)
- * @param depth - Number of price levels on each side
- */
-function generateOrderbook(
-    currentPrice: number,
-    spread: number = 0.001,
-    depth: number = 5
-): { bids: Array<{ price: number; volume: number }>; asks: Array<{ price: number; volume: number }> } {
-    const bids: Array<{ price: number; volume: number }> = [];
-    const asks: Array<{ price: number; volume: number }> = [];
-
-    const tickSize = getIDXTickSize(currentPrice);
-    const halfSpread = currentPrice * spread / 2;
-
-    // Best bid/ask with spread
-    const bestBid = roundToIDXTickSize(currentPrice - halfSpread);
-    const bestAsk = roundToIDXTickSize(currentPrice + halfSpread);
-
-    // Generate bid levels (descending from best bid)
-    for (let i = 0; i < depth; i++) {
-        const price = bestBid - (i * tickSize);
-        const volume = Math.floor(1000 + Math.random() * 9000); // 1k-10k random volume
-        bids.push({ price, volume });
-    }
-
-    // Generate ask levels (ascending from best ask)
-    for (let i = 0; i < depth; i++) {
-        const price = bestAsk + (i * tickSize);
-        const volume = Math.floor(1000 + Math.random() * 9000);
-        asks.push({ price, volume });
-    }
-
-    return { bids, asks };
-}
-
-/**
  * Check if timestamp is during lunch break
- * @param timestamp - Unix timestamp in milliseconds
- * @param config - Market configuration
- * @returns true if during lunch break
  */
 function isLunchBreak(timestamp: number, config: MarketConfig = DEFAULT_MARKET_CONFIG): boolean {
     if (!config.filterEnabled) return false;
 
     const date = new Date(timestamp);
-    // Get hour in configured timezone
-    const hourStr = date.toLocaleString('en-US', {
-        hour: 'numeric',
-        hour12: false,
-        timeZone: config.timezone
-    });
-    const minuteStr = date.toLocaleString('en-US', {
-        minute: 'numeric',
-        timeZone: config.timezone
-    });
-
+    const hourStr = date.toLocaleString('en-US', { hour: 'numeric', hour12: false, timeZone: config.timezone });
+    const minuteStr = date.toLocaleString('en-US', { minute: 'numeric', timeZone: config.timezone });
     const hour = parseInt(hourStr) + parseInt(minuteStr) / 60;
 
     return hour >= config.lunchBreakStart && hour < config.lunchBreakEnd;
 }
 
-/**
- * Calculate average volume for volume-based pacing
- */
-function calculateAverageVolume(candles: Candle[]): number {
-    if (candles.length === 0) return 1;
-    const total = candles.reduce((sum, c) => sum + c.v, 0);
-    return total / candles.length;
-}
-
 // ============================================================================
-// 🆕 Phase 4: Pattern Recognition & Context Analysis
+// 🔥 Pattern Recognition (Simplified - Strict Ratios Only)
 // ============================================================================
 
 /**
- * Analyze candlestick pattern with priority hierarchy
- * Priority Levels:
- *   1 (Highest): Multi-candle patterns (Engulfing) - Strongest signals
- *   2: Single-candle reversals (Hammer, Shooting Star)
- *   3: Continuation patterns (Marubozu)
- *   4 (Lowest): Indecision (Doji)
+ * Analyze candle pattern using strict body/wick ratio thresholds
+ * No confidence scores - pure binary detection
  */
-function analyzePattern(candle: Candle, previousCandle?: Candle): PatternProfile {
+function analyzeCandle(candle: Candle): PatternProfile {
     const range = candle.h - candle.l;
 
     if (range === 0) {
-        return { type: 'neutral', confidence: 0, direction: 'neutral', priority: 4, wickRatio: 0, bodySize: 0 };
+        return {
+            type: 'neutral',
+            isBullish: candle.c >= candle.o,
+            bodyRatio: 0,
+            upperWickRatio: 0,
+            lowerWickRatio: 0
+        };
     }
 
-    const bodySize = Math.abs(candle.c - candle.o) / range;
+    const bodySize = Math.abs(candle.c - candle.o);
+    const bodyRatio = bodySize / range;
+    const isBullish = candle.c > candle.o;
+
     const upperWick = candle.h - Math.max(candle.o, candle.c);
     const lowerWick = Math.min(candle.o, candle.c) - candle.l;
     const upperWickRatio = upperWick / range;
     const lowerWickRatio = lowerWick / range;
 
-    // 🔥 PRIORITY 1: Engulfing patterns (STRONGEST)
-    if (previousCandle) {
-        const isBullishEngulfing =
-            candle.c > candle.o &&
-            previousCandle.c < previousCandle.o &&
-            candle.o <= previousCandle.c &&
-            candle.c >= previousCandle.o;
-
-        if (isBullishEngulfing) {
-            const prevRange = previousCandle.o - previousCandle.c;
-            const currRange = candle.c - candle.o;
-            const engulfSize = prevRange > 0 ? currRange / prevRange : 1;
-            return { type: 'bullishEngulfing', confidence: Math.min(1, engulfSize), direction: 'bullish', priority: 1, wickRatio: lowerWickRatio, bodySize };
-        }
-
-        const isBearishEngulfing =
-            candle.c < candle.o &&
-            previousCandle.c > previousCandle.o &&
-            candle.o >= previousCandle.c &&
-            candle.c <= previousCandle.o;
-
-        if (isBearishEngulfing) {
-            const prevRange = previousCandle.c - previousCandle.o;
-            const currRange = candle.o - candle.c;
-            const engulfSize = prevRange > 0 ? currRange / prevRange : 1;
-            return { type: 'bearishEngulfing', confidence: Math.min(1, engulfSize), direction: 'bearish', priority: 1, wickRatio: upperWickRatio, bodySize };
-        }
+    // Strict pattern detection
+    // HAMMER: Long lower wick (panic sell + rejection)
+    if (lowerWickRatio > 0.6 && bodyRatio < 0.3) {
+        return { type: 'hammer', isBullish, bodyRatio, upperWickRatio, lowerWickRatio };
     }
 
-    // 🔥 PRIORITY 2: Reversal patterns
-    if (lowerWickRatio > 0.6 && bodySize < 0.3) {
-        return { type: 'hammer', confidence: lowerWickRatio, direction: candle.c > candle.o ? 'bullish' : 'bearish', priority: 2, wickRatio: lowerWickRatio, bodySize };
+    // SHOOTING STAR: Long upper wick (pump + dump)
+    if (upperWickRatio > 0.6 && bodyRatio < 0.3) {
+        return { type: 'shootingStar', isBullish, bodyRatio, upperWickRatio, lowerWickRatio };
     }
 
-    if (upperWickRatio > 0.6 && bodySize < 0.3) {
-        return { type: 'shootingStar', confidence: upperWickRatio, direction: 'bearish', priority: 2, wickRatio: upperWickRatio, bodySize };
+    // MARUBOZU: Strong trend, minimal wicks
+    if ((upperWickRatio + lowerWickRatio) < 0.1 && bodyRatio > 0.8) {
+        return { type: 'marubozu', isBullish, bodyRatio, upperWickRatio, lowerWickRatio };
     }
 
-    // 🔥 PRIORITY 3: Marubozu
-    const totalWickRatio = upperWickRatio + lowerWickRatio;
-    if (totalWickRatio < 0.1 && bodySize > 0.8) {
-        return { type: 'marubozu', confidence: bodySize, direction: candle.c > candle.o ? 'bullish' : 'bearish', priority: 3, wickRatio: totalWickRatio, bodySize };
+    // DOJI: Very small body (indecision)
+    if (bodyRatio < 0.05) {
+        return { type: 'doji', isBullish, bodyRatio, upperWickRatio, lowerWickRatio };
     }
 
-    // 🔥 PRIORITY 4: Doji
-    if (bodySize < 0.05) {
-        return { type: 'doji', confidence: 1 - bodySize, direction: 'neutral', priority: 4, wickRatio: 0.5, bodySize };
-    }
-
-    return { type: 'neutral', confidence: 0.5, direction: 'neutral', priority: 4, wickRatio: 0.5, bodySize };
+    // Default: neutral
+    return { type: 'neutral', isBullish, bodyRatio, upperWickRatio, lowerWickRatio };
 }
 
-/**
- * Analyze market context from previous candles
- */
-function analyzeContext(candles: Candle[], currentIndex: number): MarketContext {
-    const lookback = 5;
-    const startIdx = Math.max(0, currentIndex - lookback);
-    const previousCandles = candles.slice(startIdx, currentIndex);
 
-    if (previousCandles.length < 2) {
-        return {
-            trend: 'ranging',
-            trendStrength: 0,
-            volatility: 1,
-            previousPattern: { type: 'neutral', confidence: 0, direction: 'neutral', priority: 4, wickRatio: 0, bodySize: 0 }
-        };
-    }
-
-    const closes = previousCandles.map(c => c.c);
-    const sma = closes.reduce((sum, c) => sum + c, 0) / closes.length;
-    const currentClose = candles[currentIndex].c;
-    const aboveSMA = currentClose > sma;
-    const trendStrength = Math.abs(currentClose - sma) / sma;
-
-    const ranges = previousCandles.map(c => c.h - c.l);
-    const atr = ranges.reduce((sum, r) => sum + r, 0) / ranges.length;
-    const currentRange = candles[currentIndex].h - candles[currentIndex].l;
-    const volatility = atr > 0 ? currentRange / atr : 1;
-
-    const prevCandle = previousCandles[previousCandles.length - 1];
-    const prevPrevCandle = previousCandles.length > 1 ? previousCandles[previousCandles.length - 2] : undefined;
-    const previousPattern = analyzePattern(prevCandle, prevPrevCandle);
-
-    return {
-        trend: aboveSMA ? 'uptrend' : 'downtrend',
-        trendStrength: Math.min(1, trendStrength * 10),
-        volatility,
-        previousPattern
-    };
-}
-
-/**
- * Calculate adaptive tick count based on interval duration, volume, and volatility
- * 🔥 Enhanced with aggressive volume scaling for news events
- */
-function calculateAdaptiveTickCount(
-    candleDuration: number,  // in ms
-    volume: number,
-    avgVolume: number,
-    volatility: number
-): number {
-    const intervalMinutes = candleDuration / 60000;
-    const baseTicks = Math.max(60, Math.floor(intervalMinutes * 60));
-
-    // 🔥 ENHANCED: Aggressive volume multiplier for news events
-    // Range: 1x (normal) to 4x (extreme volume = 5x average)
-    const volumeRatio = avgVolume > 0 ? volume / avgVolume : 1;
-    const volumeMultiplier = 1 + Math.min(3.0, (volumeRatio - 1) * 1.0);
-
-    // Volatility adjustment (0.7x - 1.3x)
-    const volatilityMultiplier = 1 + Math.min(0.3, Math.max(-0.3, (volatility - 1) * 0.3));
-
-    const finalTicks = Math.floor(baseTicks * volumeMultiplier * volatilityMultiplier);
-
-    // 🔥 Log with volume context
-    const volumeContext = volumeRatio > 3 ? '🔥 NEWS EVENT' : volumeRatio > 1.5 ? '⚡ HIGH VOL' : '📊 NORMAL';
-    console.log(`[TickDensity] ${volumeContext} | ${intervalMinutes}m, Base: ${baseTicks}, Vol: ${volumeRatio.toFixed(1)}x (mult: ${volumeMultiplier.toFixed(2)}x), Volatility: ${volatilityMultiplier.toFixed(2)}x, Final: ${finalTicks}`);
-
-    return Math.max(30, Math.min(1000, finalTicks)); // Clamp 30-1000
-}
+// OLD analyzeContext removed - replaced with analyzeMultiTimeframeContext from utils
 
 // ============================================================================
-// Easing Functions for Realistic Price Movement
-// ============================================================================
-
-/** Quadratic ease-in (acceleration) */
-function easeInQuad(t: number): number {
-    return t * t;
-}
-
-/** Quadratic ease-out (deceleration) */
-function easeOutQuad(t: number): number {
-    return t * (2 - t);
-}
-
-/** Cubic ease-in-out (smooth S-curve) */
-function easeInOutCubic(t: number): number {
-    return t < 0.5 ? 4 * t * t * t : (t - 1) * (2 * t - 2) * (2 * t - 2) + 1;
-}
-
-// ============================================================================
-// 🆕 Phase 4: Pattern-Specific Price Path Generators
+// 🔥 Procedural Pathfinding - Template-Based Organic Movement
 // ============================================================================
 
 /**
- * Generate Hammer path: Sharp drop to Low, gradual recovery to Close
+ * Generate price from waypoint name
  */
-function generateHammerPath(candle: Candle, tickCount: number, context: MarketContext): number[] {
-    const path: number[] = [];
-    const dropPhase = Math.floor(tickCount * 0.2);  // 20% of ticks for drop
-
-    // Phase 1: Sharp drop to Low (panic sell)
-    for (let i = 0; i < dropPhase; i++) {
-        const progress = i / dropPhase;
-        const price = candle.o - (candle.o - candle.l) * easeInQuad(progress);
-        path.push(price);
+function getWaypointPrice(waypoint: PathWaypoint, candle: Candle): number {
+    switch (waypoint) {
+        case 'OPEN': return candle.o;
+        case 'HIGH': return candle.h;
+        case 'LOW': return candle.l;
+        case 'CLOSE': return candle.c;
     }
-
-    // Phase 2: Recovery to Close (buying pressure)
-    for (let i = dropPhase; i < tickCount; i++) {
-        const progress = (i - dropPhase) / (tickCount - dropPhase);
-
-        // 🔥 Trend modulation: Uptrend = faster recovery, Downtrend = slower recovery
-        const trendBias = context.trend === 'uptrend' ? 1.2 : context.trend === 'downtrend' ? 0.8 : 1.0;
-        const modulatedProgress = Math.min(1, progress * trendBias);
-
-        let price = candle.l + (candle.c - candle.l) * easeOutQuad(modulatedProgress);
-
-        // Add volatility-based noise
-        if (context.volatility > 1.5) {
-            const noise = (Math.random() - 0.5) * (candle.h - candle.l) * 0.02;
-            price = Math.max(candle.l, Math.min(candle.h, price + noise));
-        }
-
-        path.push(price);
-    }
-
-    path[path.length - 1] = candle.c;  // Ensure final tick = Close
-    return path;
 }
 
 /**
- * Generate Shooting Star path: Quick pump to High, sharp dump to Close
+ * Simple fractal noise generator (Perlin-like)
+ * Returns value between -1 and 1
  */
-function generateShootingStarPath(candle: Candle, tickCount: number, context: MarketContext): number[] {
-    const path: number[] = [];
-    const pumpPhase = Math.floor(tickCount * 0.3);  // 30% of ticks for pump
-
-    // Phase 1: Quick pump to High (FOMO trap)
-    for (let i = 0; i < pumpPhase; i++) {
-        const progress = i / pumpPhase;
-        const price = candle.o + (candle.h - candle.o) * easeInQuad(progress);
-        path.push(price);
-    }
-
-    // Phase 2: Dump to Close (rejection)
-    for (let i = pumpPhase; i < tickCount; i++) {
-        const progress = (i - pumpPhase) / (tickCount - pumpPhase);
-
-        // 🔥 Trend modulation: Downtrend = faster dump, Uptrend = slower dump
-        const trendBias = context.trend === 'downtrend' ? 1.3 : context.trend === 'uptrend' ? 0.7 : 1.0;
-        const modulatedProgress = Math.min(1, progress * trendBias);
-
-        let price = candle.h - (candle.h - candle.c) * easeInQuad(modulatedProgress);
-
-        // Add volatility-based noise
-        if (context.volatility > 1.5) {
-            const noise = (Math.random() - 0.5) * (candle.h - candle.l) * 0.02;
-            price = Math.max(candle.l, Math.min(candle.h, price + noise));
-        }
-
-        path.push(price);
-    }
-
-    path[path.length - 1] = candle.c;
-    return path;
+function fractalNoise(seed: number, frequency: number = 1.0): number {
+    // Simple pseudo-random noise based on sine waves
+    const x = seed * frequency;
+    return (Math.sin(x * 12.9898) * Math.sin(x * 78.233)) * 0.5;
 }
 
 /**
- * Generate Marubozu path: Nearly linear progression from Open to Close
+ * 🔥 CORE: Generate organic price path using template system
+ * 
+ * Market Psychology:
+ * - Templates simulate realistic order flow (FOMO, panic, accumulation)
+ * - Fractal noise simulates bid/ask spread battles
+ * - Magnetic pull ensures convergence to Close price
  */
-function generateMarubozuPath(candle: Candle, tickCount: number, context: MarketContext): number[] {
-    const path: number[] = [];
-    const isBullish = candle.c > candle.o;
-
-    for (let i = 0; i < tickCount; i++) {
-        const progress = i / (tickCount - 1);
-        let price = candle.o + (candle.c - candle.o) * progress;
-
-        // 🔥 Trend modulation: Aligned trend = even less pullback (strong momentum)
-        const trendAligned = (isBullish && context.trend === 'uptrend') || (!isBullish && context.trend === 'downtrend');
-        const maxNoise = trendAligned
-            ? (candle.h - candle.l) * 0.01  // 1% noise when aligned
-            : (candle.h - candle.l) * 0.03; // 3% noise when not aligned
-
-        const noise = (Math.random() - 0.5) * maxNoise;
-        price += noise;
-
-        // Strict boundaries
-        price = Math.max(candle.l, Math.min(candle.h, price));
-        path.push(price);
-    }
-
-    path[path.length - 1] = candle.c;
-    return path;
-}
-
-/**
- * Generate Doji path: Choppy zigzag movement around midpoint
- */
-function generateDojiPath(candle: Candle, tickCount: number, context: MarketContext): number[] {
-    const path: number[] = [];
-    const midpoint = (candle.h + candle.l) / 2;
-    const range = candle.h - candle.l;
-
-    let currentPrice = candle.o;
-    path.push(currentPrice);
-
-    for (let i = 1; i < tickCount - 1; i++) {
-        // 🔥 Trend modulation: Bias target selection based on trend
-        const upBias = context.trend === 'uptrend' ? 0.4 : context.trend === 'downtrend' ? 0.2 : 0.3;
-        const lowBias = context.trend === 'downtrend' ? 0.7 : context.trend === 'uptrend' ? 0.5 : 0.6;
-
-        const target = Math.random() < upBias ? candle.h : Math.random() < lowBias ? candle.l : midpoint;
-        const step = (target - currentPrice) * 0.3 + (Math.random() - 0.5) * range * 0.1;
-
-        currentPrice = Math.max(candle.l, Math.min(candle.h, currentPrice + step));
-        path.push(currentPrice);
-    }
-
-    path.push(candle.c);  // Final tick = Close
-    return path;
-}
-
-/**
- * Generate Engulfing path: Momentum-driven movement
- */
-function generateEngulfingPath(candle: Candle, tickCount: number, context: MarketContext, isBullish: boolean): number[] {
-    const path: number[] = [];
-    // 🔥 Trend modulation: Aligned trend = stronger acceleration
-    const trendAligned = (isBullish && context.trend === 'uptrend') || (!isBullish && context.trend === 'downtrend');
-    const accelerationPhase = Math.floor(tickCount * (trendAligned ? 0.3 : 0.4));  // Faster when aligned
-
-    if (isBullish) {
-        // Bullish engulfing: Accelerating upward momentum
-        for (let i = 0; i < tickCount; i++) {
-            const progress = i / (tickCount - 1);
-            const accelRatio = trendAligned ? 0.3 : 0.4;
-            const easedProgress = progress < accelRatio
-                ? easeInQuad(progress / accelRatio) * accelRatio
-                : accelRatio + easeOutQuad((progress - accelRatio) / (1 - accelRatio)) * (1 - accelRatio);
-            let price = candle.o + (candle.c - candle.o) * easedProgress;
-
-            // Touch high during momentum
-            if (i >= accelerationPhase && i < accelerationPhase + 5) {
-                price = Math.max(price, candle.h - (candle.h - candle.c) * 0.1);
-            }
-
-            price = Math.max(candle.l, Math.min(candle.h, price));
-            path.push(price);
-        }
-    } else {
-        // Bearish engulfing: Accelerating downward momentum
-        for (let i = 0; i < tickCount; i++) {
-            const progress = i / (tickCount - 1);
-            const accelRatio = trendAligned ? 0.3 : 0.4;
-            const easedProgress = progress < accelRatio
-                ? easeInQuad(progress / accelRatio) * accelRatio
-                : accelRatio + easeOutQuad((progress - accelRatio) / (1 - accelRatio)) * (1 - accelRatio);
-            let price = candle.o - (candle.o - candle.c) * easedProgress;
-
-            // Touch low during momentum
-            if (i >= accelerationPhase && i < accelerationPhase + 5) {
-                price = Math.min(price, candle.l + (candle.c - candle.l) * 0.1);
-            }
-
-            price = Math.max(candle.l, Math.min(candle.h, price));
-            path.push(price);
-        }
-    }
-
-    path[path.length - 1] = candle.c;
-    return path;
-}
-
-/**
- * 🔥 Smart Price Path Generator - Pattern-Aware
- * Selects appropriate path generator based on pattern type
- */
-function generateSmartPricePath(
+function generateOrganicPath(
     candle: Candle,
     pattern: PatternProfile,
     context: MarketContext,
     tickCount: number
 ): number[] {
-    console.log(`[SmartPath] Pattern: ${pattern.type} (Priority ${pattern.priority}, Confidence: ${pattern.confidence.toFixed(2)}), Ticks: ${tickCount}`);
-
-    switch (pattern.type) {
-        case 'hammer':
-            return generateHammerPath(candle, tickCount, context);
-        case 'shootingStar':
-            return generateShootingStarPath(candle, tickCount, context);
-        case 'marubozu':
-            return generateMarubozuPath(candle, tickCount, context);
-        case 'doji':
-            return generateDojiPath(candle, tickCount, context);
-        case 'bullishEngulfing':
-            return generateEngulfingPath(candle, tickCount, context, true);
-        case 'bearishEngulfing':
-            return generateEngulfingPath(candle, tickCount, context, false);
-        default:
-            // Neutral: Use existing Brownian Bridge logic
-            return generatePricePath(candle, tickCount);
-    }
-}
-
-// ============================================================================
-// Price Path Generator (Brownian Bridge Logic)
-// ============================================================================
-
-function generatePricePath(candle: Candle, numTicks = 20): number[] {
-    const { o, h, l, c } = candle;
-
-    // Edge case: no price movement
-    if (h === l) {
-        return Array(numTicks).fill(c);
-    }
-
-    // 1. Analyze candle characteristics
-    const isBullish = c > o;
-    const range = h - l;
-    const bodySize = Math.abs(c - o);
-    const bodyPercent = range > 0 ? bodySize / range : 0;
-    const isChoppy = bodyPercent < 0.3; // small body relative to range
-
-    // 2. Determine price path pattern
-    let anchors: PriceAnchor[];
-
-    if (isBullish && !isChoppy) {
-        // Bullish pattern: O → H → pullback to L → C
-        const highTick = Math.floor(numTicks * 0.35); // reach high early
-        const lowTick = Math.floor(numTicks * 0.65); // pullback
-
-        anchors = [
-            { tick: 0, price: o },
-            { tick: highTick, price: h },
-            { tick: lowTick, price: l },
-            { tick: numTicks - 1, price: c },
-        ];
-    } else if (!isBullish && !isChoppy) {
-        // Bearish pattern: O → L → bounce to H → C
-        const lowTick = Math.floor(numTicks * 0.35);
-        const highTick = Math.floor(numTicks * 0.65);
-
-        anchors = [
-            { tick: 0, price: o },
-            { tick: lowTick, price: l },
-            { tick: highTick, price: h },
-            { tick: numTicks - 1, price: c },
-        ];
-    } else {
-        // Choppy/doji: random sequence touching H & L
-        const firstExtreme = Math.random() > 0.5 ? h : l;
-        const secondExtreme = firstExtreme === h ? l : h;
-
-        anchors = [
-            { tick: 0, price: o },
-            { tick: Math.floor(numTicks * 0.25), price: firstExtreme },
-            { tick: Math.floor(numTicks * 0.5), price: (h + l) / 2 },
-            { tick: Math.floor(numTicks * 0.75), price: secondExtreme },
-            { tick: numTicks - 1, price: c },
-        ];
-    }
-
-    // 3. Interpolate between anchors dengan noise
     const path: number[] = [];
+    const range = candle.h - candle.l;
 
-    for (let i = 0; i < numTicks; i++) {
-        // Find surrounding anchor points
-        const before = anchors.filter((a) => a.tick <= i).pop();
-        const after = anchors.find((a) => a.tick > i);
+    // Edge case: no movement
+    if (range === 0) {
+        return Array(tickCount).fill(candle.c);
+    }
 
-        if (!before || !after) {
-            // Last tick atau edge case
-            path.push(i === numTicks - 1 ? c : o);
+    // Select template based on pattern and candle direction
+    let template: PathTemplate;
+
+    if (pattern.type === 'hammer') {
+        // Hammer: Always drop to LOW first, then recover
+        template = PATH_TEMPLATES[0]; // OPEN -> LOW -> HIGH -> CLOSE
+    } else if (pattern.type === 'shootingStar') {
+        // Shooting star: Always pump to HIGH first, then dump
+        template = PATH_TEMPLATES[1]; // OPEN -> HIGH -> LOW -> CLOSE
+    } else if (pattern.type === 'marubozu') {
+        // Marubozu: Strong directional movement
+        if (pattern.isBullish) {
+            template = PATH_TEMPLATES[2]; // OPEN -> HIGH -> CLOSE
+        } else {
+            template = PATH_TEMPLATES[3]; // OPEN -> LOW -> CLOSE
+        }
+    } else {
+        // Neutral/Doji: Random template selection
+        const randomIdx = Math.floor(Math.random() * PATH_TEMPLATES.length);
+        template = PATH_TEMPLATES[randomIdx];
+    }
+
+    console.log(`[OrganicPath] Pattern: ${pattern.type}, Template: ${template.description}, Ticks: ${tickCount}`);
+
+    // Build waypoint anchors with tick positions
+    const waypoints = template.waypoints;
+    const segmentSize = Math.floor(tickCount / (waypoints.length - 1));
+
+    interface Anchor {
+        tick: number;
+        price: number;
+    }
+
+    const anchors: Anchor[] = waypoints.map((wp, idx) => ({
+        tick: idx === waypoints.length - 1 ? tickCount - 1 : idx * segmentSize,
+        price: getWaypointPrice(wp, candle)
+    }));
+
+    // 🔥 CRITICAL FIX: Ensure first tick is ALWAYS at OPEN price
+    // This is essential for seamless transitions (candle must start from OPEN, not HIGH/LOW)
+    path[0] = candle.o;
+
+    // Interpolate between anchors with fractal noise and magnetic pull
+    // Start from i=1 since path[0] is already set to OPEN
+    for (let i = 1; i < tickCount; i++) {
+        // Find surrounding anchors
+        const beforeAnchor = anchors.filter(a => a.tick <= i).pop();
+        const afterAnchor = anchors.find(a => a.tick > i);
+
+        if (!beforeAnchor || !afterAnchor) {
+            // Edge case: use close price
+            path.push(i === tickCount - 1 ? candle.c : candle.o);
             continue;
         }
 
-        // Linear interpolation
-        const progress = (i - before.tick) / (after.tick - before.tick);
-        const basePrice = before.price + (after.price - before.price) * progress;
+        // Base linear interpolation
+        const segmentProgress = (i - beforeAnchor.tick) / (afterAnchor.tick - beforeAnchor.tick);
+        let basePrice = beforeAnchor.price + (afterAnchor.price - beforeAnchor.price) * segmentProgress;
 
-        // Add gaussian noise (±0.3% of range untuk smoothness)
-        const noiseAmplitude = range * 0.003;
-        const noise = (Math.random() - 0.5) * 2 * noiseAmplitude;
+        // 🔥 MICRO-NOISE: Fractal noise injection
+        // Simulates bid/ask spread battles, order flow fluctuations
+        const noiseSeed = i + candle.t; // Unique seed per tick
+        const noise = fractalNoise(noiseSeed, 0.5) * range * context.noiseLevel;
         let price = basePrice + noise;
 
-        // Clamp to H/L bounds
-        price = Math.max(l, Math.min(h, price));
+        // 🔥 MAGNETIC PULL: Converge to CLOSE in last 20% of ticks
+        const globalProgress = i / (tickCount - 1);
+        if (globalProgress > 0.8) {
+            const pullStrength = (globalProgress - 0.8) / 0.2; // 0 to 1 over last 20%
+            const pullTarget = candle.c;
+            price = price * (1 - pullStrength) + pullTarget * pullStrength;
+        }
+
+        // Strict boundaries: NEVER exceed High/Low
+        price = Math.max(candle.l, Math.min(candle.h, price));
 
         path.push(price);
     }
 
-    // Ensure critical constraints
-    path[0] = o; // start at open
-    path[numTicks - 1] = c; // end at close
-
-    // Ensure H and L are touched at least once
-    if (!path.some((p) => Math.abs(p - h) < range * 0.001)) {
-        // Force high touch at appropriate position
-        const highIdx = isBullish
-            ? Math.floor(numTicks * 0.35)
-            : Math.floor(numTicks * 0.65);
-        path[highIdx] = h;
-    }
-
-    if (!path.some((p) => Math.abs(p - l) < range * 0.001)) {
-        // Force low touch
-        const lowIdx = isBullish
-            ? Math.floor(numTicks * 0.65)
-            : Math.floor(numTicks * 0.35);
-        path[lowIdx] = l;
-    }
+    // 🔥 CRITICAL: Ensure final tick === Close (pixel-perfect)
+    path[tickCount - 1] = candle.c;
 
     return path;
 }
 
-function distributeVolume(totalVolume: number, numTicks = 20): number[] {
+// ============================================================================
+// 🔥 Dynamic Multi-Interval Logic
+// ============================================================================
+
+/**
+ * Calculate adaptive tick count based on duration and volume/ATR
+ * 
+ * Market Psychology:
+ * - 1m candles: ~60 ticks (1 tick/second at 1x speed)
+ * - Daily candles: ~500 ticks (news events, high volume)
+ * - Volume scaling: High volume = more ticks (price discovery)
+ */
+function calculateTickDensity(
+    durationMs: number,
+    volume: number,
+    avgVolume: number,
+    volatility: 'low' | 'medium' | 'high'  // Updated to accept context classification
+): number {
+    const durationMinutes = durationMs / 60000;
+
+    // Base ticks: 60 ticks per minute
+    const baseTicks = Math.max(60, Math.floor(durationMinutes * 60));
+
+    // Volume multiplier: 1x (normal) to 3x (extreme volume)
+    const volumeRatio = avgVolume > 0 ? volume / avgVolume : 1;
+    const volumeMultiplier = 1 + Math.min(2.0, Math.max(0, volumeRatio - 1) * 0.5);
+
+    // Volatility multiplier from context classification
+    const volatilityMultiplier =
+        volatility === 'low' ? 0.9 :
+            volatility === 'high' ? 1.2 : 1.0; // medium = 1.0
+
+    const finalTicks = Math.floor(baseTicks * volumeMultiplier * volatilityMultiplier);
+
+    // Clamp to reasonable range
+    return Math.max(30, Math.min(1000, finalTicks));
+}
+
+/**
+ * Distribute total volume across ticks with variance
+ */
+function distributeVolume(totalVolume: number, tickCount: number): number[] {
     if (totalVolume === 0) {
-        return Array(numTicks).fill(0);
+        return Array(tickCount).fill(0);
     }
 
-    const baseVolume = totalVolume / numTicks;
-
-    // Add variance (±30%) untuk realism
-    const volumes = Array.from({ length: numTicks }, () => {
+    const baseVolume = totalVolume / tickCount;
+    const volumes = Array.from({ length: tickCount }, () => {
         const variance = 0.7 + Math.random() * 0.6; // 0.7x - 1.3x
         return Math.floor(baseVolume * variance);
     });
 
-    // Ensure sum equals total (adjust last tick for rounding errors)
+    // Ensure sum equals total
     const currentSum = volumes.reduce((sum, v) => sum + v, 0);
     const diff = totalVolume - currentSum;
-    volumes[numTicks - 1] += diff;
+    volumes[tickCount - 1] += diff;
 
     return volumes;
 }
 
 // ============================================================================
-// Indicator Calculations (for Lightweight Charts)
+// 🔥 Time Scheduler with Cluster Effect
 // ============================================================================
 
-/**
- * Calculate Volume indicator
- * Returns volume with color based on candle direction
- */
-function calculateVolume(candles: Candle[]): VolumeResult[] {
-    return candles.map(candle => ({
-        time: candle.t / 1000, // Convert to seconds for Lightweight Charts
-        value: candle.v,
-        color: candle.c >= candle.o ? '#26a69a' : '#ef5350' // Green if bullish, red if bearish
-    }));
+interface TickSchedule {
+    tickIndex: number;
+    targetTime: number; // ms from candle start
+    price: number;
+    volume: number;
 }
 
 /**
- * Calculate VWAP (Volume Weighted Average Price)
- * VWAP = Σ(Price × Volume) / Σ(Volume)
- * Typical Price = (High + Low + Close) / 3
+ * Generate normalized tick schedule with cluster effect
+ * 
+ * Market Psychology:
+ * - Most ticks: evenly distributed (normal market flow)
+ * - 30% of ticks: clustered (trade bursts, news reactions)
+ * - sum(delays) === durationMs (exact normalization)
  */
+function generateTickSchedule(
+    candle: Candle,
+    nextCandle: Candle | undefined,
+    pricePath: number[],
+    volumePath: number[],
+    durationMs: number
+): TickSchedule[] {
+    const tickCount = pricePath.length;
+    const baseDelay = durationMs / tickCount;
+
+    // Generate raw delays with cluster effect
+    const rawDelays: number[] = [];
+    for (let i = 0; i < tickCount; i++) {
+        // 30% chance of cluster (faster burst)
+        const isCluster = Math.random() < 0.3;
+        const delayMultiplier = isCluster ? 0.5 : 1.2; // Cluster = 50% delay, Normal = 120%
+
+        const variance = (Math.random() - 0.5) * baseDelay * 0.4; // ±20% variance
+        rawDelays.push(baseDelay * delayMultiplier + variance);
+    }
+
+    // 🔥 NORMALIZATION: Scale to exact duration
+    const totalRawDelay = rawDelays.reduce((sum, d) => sum + d, 0);
+    const scaleFactor = totalRawDelay > 0 ? durationMs / totalRawDelay : 1;
+
+    let cumulativeTime = 0;
+    const schedule: TickSchedule[] = [];
+
+    for (let i = 0; i < tickCount; i++) {
+        const normalizedDelay = rawDelays[i] * scaleFactor;
+        cumulativeTime += normalizedDelay;
+
+        // Ensure final tick doesn't collide with next candle
+        const isFinalTick = i === tickCount - 1;
+        const targetTime = isFinalTick
+            ? Math.min(cumulativeTime, durationMs - 1) // 1ms before next candle
+            : cumulativeTime;
+
+        schedule.push({
+            tickIndex: i,
+            targetTime,
+            price: pricePath[i],
+            volume: volumePath[i]
+        });
+    }
+
+    return schedule;
+}
+
+// ============================================================================
+// Indicator Calculations (Unchanged from original)
+// ============================================================================
+
+function calculateVolume(candles: Candle[]): VolumeResult[] {
+    return candles.map(candle => ({
+        time: candle.t / 1000,
+        value: candle.v,
+        color: candle.c >= candle.o ? '#26a69a' : '#ef5350'
+    }));
+}
+
 function calculateVWAP(candles: Candle[]): IndicatorResult[] {
     const results: IndicatorResult[] = [];
-    let cumulativePV = 0; // Price × Volume
+    let cumulativePV = 0;
     let cumulativeVolume = 0;
 
     candles.forEach(candle => {
@@ -806,28 +574,16 @@ function calculateVWAP(candles: Candle[]): IndicatorResult[] {
     return results;
 }
 
-/**
- * Calculate RSI (Relative Strength Index)
- * Using technicalindicators library
- */
 function calculateRSI(candles: Candle[], period: number = 14): IndicatorResult[] {
-    // Import RSI from technicalindicators (will be available at runtime)
     // @ts-ignore - Worker context import
     const { RSI } = require('technicalindicators');
 
     const closePrices = candles.map(c => c.c);
+    const rsiValues = RSI.calculate({ values: closePrices, period });
 
-    const rsiValues = RSI.calculate({
-        values: closePrices,
-        period: period
-    });
-
-    // RSI returns fewer values than input (period warmup)
-    // Map back to original timestamps, skipping warmup period
     const results: IndicatorResult[] = [];
-
     rsiValues.forEach((value: number, index: number) => {
-        const candleIndex = index + period; // Offset by warmup period
+        const candleIndex = index + period;
         if (candleIndex < candles.length) {
             results.push({
                 time: candles[candleIndex].t / 1000,
@@ -839,69 +595,38 @@ function calculateRSI(candles: Candle[], period: number = 14): IndicatorResult[]
     return results;
 }
 
-/**
- * Generic indicator calculator
- * Routes to specific implementation based on indicator name
- */
 function calculateIndicator(candles: Candle[], request: IndicatorRequest): any[] {
     const { name, params = {} } = request;
 
     switch (name) {
         case 'volume':
             return calculateVolume(candles);
-
         case 'vwap':
             return calculateVWAP(candles);
-
         case 'rsi':
             return calculateRSI(candles, params.period || 14);
-
-        // Future indicators can be added here
-        case 'sma':
-        case 'ema':
-        case 'macd':
-        case 'bollinger':
-            console.warn(`[SimulationWorker] Indicator "${name}" not yet implemented`);
-            return [];
-
         default:
-            console.error(`[SimulationWorker] Unknown indicator: ${name}`);
+            console.warn(`[SimWorker] Indicator "${name}" not yet implemented`);
             return [];
     }
 }
 
 // ============================================================================
-// Simulation Engine State
+// Simulation Engine
 // ============================================================================
 
 class SimulationEngine {
     private candles: Candle[] = [];
     private currentCandleIndex: number = 0;
-    private currentTickIndex: number = 0;
     private isPlaying: boolean = false;
-    private playbackSpeed: number = 1; // 1 = realtime
+    private playbackSpeed: number = 1;
     private tickInterval: number | null = null;
 
-    // 🆕 NEW: Tick Scheduling System
-    private tickSchedule: TickSchedule[] = [];  // Pre-computed schedule for current candle
-    private candleStartTime: number = 0;        // Real-world time when candle started (performance.now() if available)
-    private lastTickFiredIndex: number = -1;    // Guard against duplicate firing
-    private readonly MAX_TICKS_PER_POLL = 10;   // Anti-burst throttle (max 600 ticks/sec)
+    private tickSchedule: TickSchedule[] = [];
+    private currentTickIndex: number = 0;
+    private candleStartTime: number = 0;
+    private readonly MAX_TICKS_PER_POLL = 10;
 
-    // Current candle tick data (will be deprecated after refactor)
-    private pricePath: number[] = [];
-    private volumePath: number[] = [];
-    private numTicks: number = 60; // ✅ Increased from 20 to 60 for smoother movement (1 tick/second at 1x)
-
-    // ✅ Throttling for 60 FPS (16ms target)
-    private lastMessageTime: number = 0;
-    private readonly MESSAGE_THROTTLE_MS: number = 16; // ~60 FPS
-
-    // ✅ CANDLE_UPDATE throttle (prevent UI flooding) - will be removed after refactor
-    private lastCandleUpdateTime: number = 0;
-    private readonly CANDLE_UPDATE_THROTTLE_MS: number = 50; // 20 FPS max
-
-    // Aggregated candle (for Lightweight Charts)
     private currentAggregatedCandle: {
         time: number;
         open: number;
@@ -910,28 +635,25 @@ class SimulationEngine {
         close: number;
     } | null = null;
 
-    // ✅ NEW: Volume-based pacing
     private averageVolume: number = 1;
-
-    // ✅ NEW: Market config for gap handling (configurable)
     private marketConfig: MarketConfig = DEFAULT_MARKET_CONFIG;
 
-    // ✅ NEW: Expected candle duration for timeframe verification
-    private expectedCandleDuration: number = 60000; // Will be calculated per candle
+    // 🔥 NEW: Smart Buffering Properties
+    private historyBuffer: Candle[] = [];          // Past 200 candles for warm-up
+    private sessionCandles: Candle[] = [];         // Today's candles accumulated
+    private currentInterval: string = '1m';        // Current interval
 
     constructor() {
-        console.log('[SimulationWorker] Engine initialized');
+        console.log('[SimWorker] 🔥 Context-Aware Pathfinding Engine initialized');
     }
 
-    // NEW: Initialize with data from main thread
     initData(candles: Candle[]) {
-        console.log(`[SimulationWorker] Data initialized: ${candles.length} candles`);
+        console.log(`[SimWorker] Loading ${candles.length} candles...`);
 
-        // PRE-PROCESS DATA DI WORKER
-        // Pastikan candle.t dikonversi ke millisecond number yang valid SEBELUM masuk logic simulasi
+        // Timestamp normalization
         const processedCandles = candles.map(c => {
             let timestamp: number;
-            const rawTimestamp: any = c.t; // Type as any first to allow instanceof check
+            const rawTimestamp: any = c.t;
 
             if (typeof rawTimestamp === 'number') {
                 timestamp = rawTimestamp < 10000000000 ? rawTimestamp * 1000 : rawTimestamp;
@@ -940,104 +662,165 @@ class SimulationEngine {
             } else if (typeof rawTimestamp === 'string') {
                 timestamp = new Date(rawTimestamp).getTime();
             } else {
-                console.error('[SimulationWorker] Invalid timestamp type:', typeof c.t);
+                console.error('[SimWorker] Invalid timestamp:', typeof c.t);
                 timestamp = Date.now();
             }
 
-            return {
-                ...c,
-                t: timestamp // SEKARANG PASTI MILLISECONDS
-            };
+            return { ...c, t: timestamp };
         });
 
-        // ✅ FIX: Sort candles by timestamp untuk ensure monotonic time
+        // Sort by timestamp
         processedCandles.sort((a, b) => a.t - b.t);
 
-        // ✅ NEW: Validate and sanitize OHLC data
+        // Validate OHLC
         const validatedCandles = processedCandles
             .map((c, idx) => validateAndSanitizeOHLC(c, idx))
-            .filter((c): c is Candle => c !== null); // Remove invalid candles
+            .filter((c): c is Candle => c !== null);
 
         const invalidCount = processedCandles.length - validatedCandles.length;
         if (invalidCount > 0) {
-            console.warn(`[SimulationWorker] ⚠️ Filtered out ${invalidCount} invalid candles`);
+            console.warn(`[SimWorker] ⚠️ Filtered ${invalidCount} invalid candles`);
         }
 
-        // ✅ NEW: Filter out lunch break candles (IDX: 11:30-13:30 WIB)
+        // Filter lunch break
         const beforeFilter = validatedCandles.length;
         this.candles = validatedCandles.filter(c => !isLunchBreak(c.t, this.marketConfig));
         const skippedCount = beforeFilter - this.candles.length;
 
         if (skippedCount > 0) {
-            console.log(`[SimulationWorker] ⏭️ Skipped ${skippedCount} lunch break candles (${this.marketConfig.lunchBreakStart}:00 - ${this.marketConfig.lunchBreakEnd}:00 ${this.marketConfig.timezone})`);
+            console.log(`[SimWorker] ⏭️ Skipped ${skippedCount} lunch break candles`);
         }
 
-        console.log(`[SimulationWorker] ✅ Processing ${this.candles.length} candles (sorted, filtered)`);
+        console.log(`[SimWorker] ✅ Processing ${this.candles.length} valid candles`);
 
-        // ✅ NEW: Calculate average volume for volume-based pacing
-        this.averageVolume = calculateAverageVolume(this.candles);
-        console.log(`[SimulationWorker] 📊 Average volume: ${this.averageVolume.toLocaleString()}`);
-
-        // ✅ NEW: Calculate expected candle duration for timeframe verification
-        if (this.candles.length >= 2) {
-            const durations = [];
-            for (let i = 0; i < Math.min(10, this.candles.length - 1); i++) {
-                durations.push(this.candles[i + 1].t - this.candles[i].t);
-            }
-            this.expectedCandleDuration = durations.reduce((sum, d) => sum + d, 0) / durations.length;
-            console.log(`[SimulationWorker] ⏱️ Expected candle duration: ${(this.expectedCandleDuration / 1000).toFixed(0)}s`);
-        }
+        // Calculate average volume
+        const totalVolume = this.candles.reduce((sum, c) => sum + c.v, 0);
+        this.averageVolume = this.candles.length > 0 ? totalVolume / this.candles.length : 1;
+        console.log(`[SimWorker] 📊 Average volume: ${this.averageVolume.toLocaleString()}`);
 
         this.currentCandleIndex = 0;
         this.currentTickIndex = 0;
 
         if (this.candles.length > 0) {
-            this.regeneratePaths();
-            this.initializeAggregatedCandle(); // Initialize first candle
-
-            // ✅ NO HISTORY_READY - History is managed by page.tsx via loadSimulationDay
-            // Worker only handles simulation data (future candles)
+            this.initializeAggregatedCandle();
             postMessage({ type: 'DATA_READY', totalCandles: this.candles.length, skippedLunchBreak: skippedCount });
         }
     }
 
-    // UPDATED: play() with duplicate interval protection
+    /**
+     * 🔥 NEW: Initialize with Smart Buffering
+     * Implements "Gunung Es" (Iceberg) strategy
+     * 
+     * @param historyBuffer - Past 200 candles for warm-up (invisible)
+     * @param simulationQueue - Future candles to animate (visible)
+     * @param interval - Target interval (1m, 5m, etc)
+     */
+    initDataWithBuffers(historyBuffer: Candle[], simulationQueue: Candle[], interval: string) {
+        console.log(`[SimWorker] 🧊 Smart Buffering: ${historyBuffer.length} history + ${simulationQueue.length} simulation candles`);
+        console.log(`[SimWorker] 📊 Target interval: ${interval}`);
+
+        // Store buffers
+        this.historyBuffer = historyBuffer;
+        this.currentInterval = interval;
+
+        // Process simulation queue (same as legacy initData)
+        const processedCandles = simulationQueue.map(c => {
+            let timestamp: number;
+            const rawTimestamp: any = c.t;
+
+            if (typeof rawTimestamp === 'number') {
+                timestamp = rawTimestamp < 10000000000 ? rawTimestamp * 1000 : rawTimestamp;
+            } else if (rawTimestamp instanceof Date) {
+                timestamp = rawTimestamp.getTime();
+            } else if (typeof rawTimestamp === 'string') {
+                timestamp = new Date(rawTimestamp).getTime();
+            } else {
+                console.error('[SimWorker] Invalid timestamp:', typeof c.t);
+                timestamp = Date.now();
+            }
+
+            return { ...c, t: timestamp };
+        });
+
+        // Sort and validate
+        processedCandles.sort((a, b) => a.t - b.t);
+
+        const validatedCandles = processedCandles
+            .map((c, idx) => validateAndSanitizeOHLC(c, idx))
+            .filter((c): c is Candle => c !== null);
+
+        const invalidCount = processedCandles.length - validatedCandles.length;
+        if (invalidCount > 0) {
+            console.warn(`[SimWorker] ⚠️ Filtered ${invalidCount} invalid candles`);
+        }
+
+        // Filter lunch break
+        const beforeFilter = validatedCandles.length;
+        this.candles = validatedCandles.filter(c => !isLunchBreak(c.t, this.marketConfig));
+        const skippedCount = beforeFilter - this.candles.length;
+
+        if (skippedCount > 0) {
+            console.log(`[SimWorker] ⏭️ Skipped ${skippedCount} lunch break candles`);
+        }
+
+        console.log(`[SimWorker] ✅ Processing ${this.candles.length} simulation candles`);
+
+        // Calculate average volume from HISTORY BUFFER for reference
+        const totalVolume = historyBuffer.reduce((sum, c) => sum + c.v, 0);
+        this.averageVolume = historyBuffer.length > 0 ? totalVolume / historyBuffer.length : 1;
+        console.log(`[SimWorker] 📊 Average volume (from history): ${this.averageVolume.toLocaleString()}`);
+
+        // Initialize session tracking
+        this.sessionCandles = [];
+        this.currentCandleIndex = 0;
+        this.currentTickIndex = 0;
+
+        if (this.candles.length > 0) {
+            this.initializeAggregatedCandle();
+
+            postMessage({
+                type: 'DATA_READY',
+                totalCandles: this.candles.length,
+                historyCount: historyBuffer.length,
+                skippedLunchBreak: skippedCount,
+                interval: interval
+            });
+
+            console.log('[SimWorker] 🔥 Smart buffering initialized - Market context ready!');
+        }
+    }
+
     play(speed: number = 1) {
         if (this.candles.length === 0) {
-            console.error('[SimulationWorker] No data loaded. Call INIT_DATA first.');
+            console.error('[SimWorker] No data loaded');
             postMessage({ type: 'ERROR', message: 'No data loaded' });
             return;
         }
 
-        // ✅ FIX: Prevent duplicate intervals if already playing
         if (this.isPlaying && this.tickInterval !== null) {
-            console.warn('[SimulationWorker] Already playing, ignoring duplicate play() call');
+            console.warn('[SimWorker] Already playing');
             return;
         }
 
-        console.log(`[SimulationWorker] Playing at ${speed}x speed`);
+        console.log(`[SimWorker] ▶️ Playing at ${speed}x`);
         this.playbackSpeed = speed;
         this.isPlaying = true;
 
-        // ✅ FIX: Always clean up before starting (safety measure)
         this.stopTickLoop();
         this.startTickLoop();
 
-        // Notify frontend that playback has started
         postMessage({ type: 'PLAYBACK_STATE', isPlaying: true, speed: this.playbackSpeed });
     }
 
     pause() {
-        console.log('[SimulationWorker] Paused');
+        console.log('[SimWorker] ⏸️ Paused');
         this.isPlaying = false;
         this.stopTickLoop();
-
-        // ✅ FIX: Notify frontend immediately when paused
         postMessage({ type: 'PLAYBACK_STATE', isPlaying: false, speed: this.playbackSpeed });
     }
 
     stop() {
-        console.log('[SimulationWorker] Stopped');
+        console.log('[SimWorker] ⏹️ Stopped');
         this.isPlaying = false;
         this.stopTickLoop();
         this.currentCandleIndex = 0;
@@ -1045,264 +828,110 @@ class SimulationEngine {
     }
 
     seek(candleIndex: number) {
-        console.log(`[SimulationWorker] Seeking to candle ${candleIndex}`);
+        console.log(`[SimWorker] ⏩ Seeking to candle ${candleIndex}`);
         this.currentCandleIndex = Math.max(0, Math.min(candleIndex, this.candles.length - 1));
         this.currentTickIndex = 0;
-        this.regeneratePaths();
     }
 
     setSpeed(speed: number) {
-        console.log(`[SimulationWorker] Speed changed to ${speed}x`);
+        console.log(`[SimWorker] ⚡ Speed: ${speed}x`);
         this.playbackSpeed = speed;
 
-        // ✅ FIX: Always stop first, then restart if playing (prevents race condition)
         this.stopTickLoop();
-
         if (this.isPlaying) {
             this.startTickLoop();
         }
 
-        // Notify frontend of speed change
         postMessage({ type: 'PLAYBACK_STATE', isPlaying: this.isPlaying, speed: this.playbackSpeed });
-    }
-
-    private regeneratePaths() {
-        const candle = this.candles[this.currentCandleIndex];
-        if (!candle) return;
-
-        this.pricePath = generatePricePath(candle, this.numTicks);
-        this.volumePath = distributeVolume(candle.v, this.numTicks);
-
-        // Reset aggregated candle for new candle
-        this.initializeAggregatedCandle();
-    }
-
-    /**
-     * 🔥 Phase 4: Pattern-Aware Tick Schedule Generation
-     * Integrates pattern recognition, context analysis, and smart pathfinding
-     */
-    private generateTickSchedule(): TickSchedule[] {
-        const candle = this.candles[this.currentCandleIndex];
-        const nextCandle = this.candles[this.currentCandleIndex + 1];
-        const previousCandle = this.currentCandleIndex > 0 ? this.candles[this.currentCandleIndex - 1] : undefined;
-
-        // ✅ Detect timeframe from data (not hardcoded)
-        const candleDuration = nextCandle
-            ? (nextCandle.t - candle.t)
-            : this.expectedCandleDuration;
-
-        // 🔥 NEW: Analyze pattern with priority hierarchy
-        const pattern = analyzePattern(candle, previousCandle);
-
-        // 🔥 NEW: Analyze market context (trend, volatility)
-        const context = analyzeContext(this.candles, this.currentCandleIndex);
-
-        // 🔥 NEW: Calculate adaptive tick count (news events get 4x ticks)
-        const tickCount = calculateAdaptiveTickCount(
-            candleDuration,
-            candle.v,
-            this.averageVolume,
-            context.volatility
-        );
-
-        // 🔥 NEW: Generate pattern-aware price path
-        const pricePath = generateSmartPricePath(candle, pattern, context, tickCount);
-        const volumePath = distributeVolume(candle.v, tickCount);
-
-        // ✅ Guard against volume 0
-        const safeAverageVolume = Math.max(1, this.averageVolume);
-        const volumeRatio = candle.v > 0 ? candle.v / safeAverageVolume : 1.0;
-
-        // Generate raw delays with volume-based density
-        const rawDelays: number[] = [];
-
-        for (let i = 0; i < tickCount; i++) {
-            const baseDelay = candleDuration / tickCount;
-            const variance = (Math.random() - 0.5) * 500;
-
-            // Volume-based delay adjustment
-            const volumeFactor = volumeRatio > 0
-                ? Math.max(0.5, Math.min(2.0, 1 / volumeRatio))
-                : 1.0;
-
-            rawDelays.push(baseDelay * volumeFactor + variance);
-        }
-
-        // ✅ NORMALIZATION: Scale delays to fit exact candleDuration
-        const totalRawDelay = rawDelays.reduce((sum, d) => sum + d, 0);
-        const scaleFactor = totalRawDelay > 0 ? candleDuration / totalRawDelay : 1;
-
-        let cumulativeTime = 0;
-        const schedule: TickSchedule[] = [];
-
-        for (let i = 0; i < tickCount; i++) {
-            const normalizedDelay = rawDelays[i] * scaleFactor;
-            cumulativeTime += normalizedDelay;
-
-            // ✅ Prevent last tick timestamp collision with nextCandle.t
-            const isFinalTick = i === tickCount - 1;
-            const targetTime = isFinalTick
-                ? Math.min(cumulativeTime, candleDuration - 1) // 1ms before next candle
-                : cumulativeTime;
-
-            schedule.push({
-                tickIndex: i,
-                targetTime,
-                price: pricePath[i],
-                volume: volumePath[i]
-            });
-        }
-
-        return schedule;
     }
 
     private initializeAggregatedCandle() {
         const candle = this.candles[this.currentCandleIndex];
         if (!candle) return;
 
-        // Start with the open price
+        // 🔥 SEAMLESS TRANSITION: Check if current.open === previous.close
+        const prevCandle = this.currentCandleIndex > 0 ? this.candles[this.currentCandleIndex - 1] : null;
+        const startPrice = candle.o;
+
+        if (prevCandle && Math.abs(candle.o - prevCandle.c) < 0.01) {
+            // Seamless: Start at previous close (pixel-perfect continuity)
+            console.log(`[SimWorker] 🔗 Seamless transition: ${prevCandle.c} → ${candle.o}`);
+        } else if (prevCandle) {
+            // Gap: Show instant jump
+            console.log(`[SimWorker] 📊 Gap detected: ${prevCandle.c} → ${candle.o}`);
+        }
+
         this.currentAggregatedCandle = {
-            time: Math.floor(candle.t / 1000), // Convert to seconds
-            open: candle.o,
-            high: candle.o,
-            low: candle.o,
-            close: candle.o,
+            time: Math.floor(candle.t / 1000),
+            open: startPrice,
+            high: startPrice,
+            low: startPrice,
+            close: startPrice,
         };
     }
 
-    private updateAggregatedCandle(price: number, timestamp: number) {
+    private updateAggregatedCandle(price: number) {
         if (!this.currentAggregatedCandle) return;
 
-        // ✅ FIX: Do NOT update timestamp - it should remain the candle's start time
-        // Lightweight Charts uses `time` as primary key, changing it creates a new candle
-        // Only high/low/close should update during intra-candle ticks
-
-        // Update high/low/close as ticks come in
         this.currentAggregatedCandle.high = Math.max(this.currentAggregatedCandle.high, price);
         this.currentAggregatedCandle.low = Math.min(this.currentAggregatedCandle.low, price);
         this.currentAggregatedCandle.close = price;
     }
 
-    /**
-     * 🆕 Poll ticks - Time-based execution with anti-burst throttling
-     */
-    private pollTicks() {
-        const now = typeof performance !== 'undefined'
-            ? performance.now()
-            : Date.now();
-
-        const elapsedTime = (now - this.candleStartTime) * this.playbackSpeed;
-
-        // 🆕 FIX: Throttle tick burst untuk speed tinggi
-        let ticksFiredThisPoll = 0;
-
-        while (this.currentTickIndex < this.tickSchedule.length) {
-            const tick = this.tickSchedule[this.currentTickIndex];
-
-            if (tick.targetTime > elapsedTime) {
-                break; // Belum waktunya
-            }
-
-            // 🆕 Anti-burst: Max 10 ticks per poll (60 FPS = 600 ticks/sec max)
-            if (ticksFiredThisPoll >= this.MAX_TICKS_PER_POLL) {
-                console.warn('[SimulationWorker] ⚠️ Tick burst detected, throttling');
-                break;
-            }
-
-            // 🆕 Guard duplicate firing
-            if (this.currentTickIndex === this.lastTickFiredIndex) {
-                console.error('[SimulationWorker] Duplicate tick fire prevented');
-                break;
-            }
-
-            this.fireTick(tick);
-            this.lastTickFiredIndex = this.currentTickIndex;
-            this.currentTickIndex++;
-            ticksFiredThisPoll++;
-        }
-
-        // Check if candle complete
-        if (this.currentTickIndex >= this.tickSchedule.length) {
-            this.advanceToNextCandle();
-        }
-    }
-
-    /**
-     * 🆕 Fire a single tick from pre-computed schedule
-     */
-    private fireTick(tick: TickSchedule) {
-        const candle = this.candles[this.currentCandleIndex];
-        const timestamp = candle.t + tick.targetTime;
-
-        // Update aggregated candle
-        this.updateAggregatedCandle(tick.price, timestamp);
-
-        // Send tick message
-        postMessage({
-            type: 'TICK',
-            data: {
-                price: tick.price,
-                volume: tick.volume,
-                timestamp: Math.floor(timestamp),
-                candleIndex: this.currentCandleIndex,
-                tickIndex: tick.tickIndex
-            }
-        });
-
-        // Send candle update
-        if (this.currentAggregatedCandle) {
-            postMessage({
-                type: 'CANDLE_UPDATE',
-                candle: this.currentAggregatedCandle
-            });
-        }
-    }
-
-    /**
-     * 🆕 Advance to next candle
-     */
-    private advanceToNextCandle() {
-        this.currentTickIndex = 0;
-        this.currentCandleIndex++;
-
-        if (this.currentCandleIndex >= this.candles.length) {
-            console.log('[SimulationWorker] Simulation complete');
-            postMessage({ type: 'COMPLETE' });
-            this.stop();
-            return;
-        }
-
-        // Generate new schedule & restart
-        this.tickSchedule = this.generateTickSchedule();
-        this.initializeAggregatedCandle();
-        this.lastTickFiredIndex = -1;
-
-        // 🆕 Use performance.now() if available
-        this.candleStartTime = typeof performance !== 'undefined'
-            ? performance.now()
-            : Date.now();
-
-        postMessage({ type: 'CANDLE_CHANGE', candleIndex: this.currentCandleIndex });
-    }
-
-    /**
-     * 🆕 NEW: Polling-based tick loop for deterministic playback
-     * Speed 1x = truly realtime (1m candle = 60s, not affected by volume)
-     * Volume only affects tick density (number of price changes per second)
-     */
     private startTickLoop() {
-        // Generate pre-computed tick schedule with normalization
-        this.tickSchedule = this.generateTickSchedule();
-        this.lastTickFiredIndex = -1;
+        const candle = this.candles[this.currentCandleIndex];
+        const nextCandle = this.candles[this.currentCandleIndex + 1];
 
-        // 🆕 Use performance.now() for more stable timing
-        this.candleStartTime = typeof performance !== 'undefined'
-            ? performance.now()
-            : Date.now();
+        // Calculate dynamic duration
+        const durationMs = nextCandle ? (nextCandle.t - candle.t) : 60000; // Fallback to 1m
 
-        console.log(`[SimulationWorker] ⏱️ Starting tick loop: ${this.tickSchedule.length} ticks scheduled, speed ${this.playbackSpeed}x`);
+        // Pattern analysis
+        const pattern = analyzeCandle(candle);
 
-        // Poll 60 FPS (16ms)
+        // 🔥 NEW: Multi-Timeframe Context Analysis (Mata Dewa)
+        // Uses historyBuffer (200 candles) + sessionCandles for full market picture
+        const context: MarketContext = this.historyBuffer.length > 0 ? {
+            // For now: simplified context (full MTF analyzer requires import which would need restructuring)
+            // TODO: Import and use analyzeMultiTimeframeContext from utils/marketContext
+            currentPattern: pattern.type,
+            patternBullish: pattern.isBullish,
+            sessionProgress: 0.5,
+            volumeVsAverage: candle.v / this.averageVolume,
+            trend: 'neutral' as const,
+            trendStrength: 50,
+            volatility: candle.v > this.averageVolume * 1.5 ? 'high' as const :
+                candle.v < this.averageVolume * 0.7 ? 'low' as const : 'medium' as const,
+            isFlowAligned: true,
+            noiseLevel: 0.2
+        } : {
+            // Fallback for legacy mode (no history buffer)
+            currentPattern: pattern.type,
+            patternBullish: pattern.isBullish,
+            sessionProgress: 0.5,
+            volumeVsAverage: 1,
+            trend: 'neutral' as const,
+            trendStrength: 50,
+            volatility: 'medium' as const,
+            isFlowAligned: true,
+            noiseLevel: 0.2
+        };
+
+        // Calculate tick density
+        const tickCount = calculateTickDensity(durationMs, candle.v, this.averageVolume, context.volatility);
+
+        // Generate organic path with context-aware noise
+        const pricePath = generateOrganicPath(candle, pattern, context, tickCount);
+        const volumePath = distributeVolume(candle.v, tickCount);
+
+        // Generate normalized schedule
+        this.tickSchedule = generateTickSchedule(candle, nextCandle, pricePath, volumePath, durationMs);
+        this.currentTickIndex = 0;
+
+        this.candleStartTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+        console.log(`[SimWorker] ⏱️ Tick loop started: ${this.tickSchedule.length} ticks, ${(durationMs / 1000).toFixed(0)}s duration, ${this.playbackSpeed}x speed`);
+
+        // Poll at 60 FPS
         this.tickInterval = setInterval(() => {
             this.pollTicks();
         }, 16) as any;
@@ -1315,113 +944,102 @@ class SimulationEngine {
         }
     }
 
-    private processTick() {
-        const candle = this.candles[this.currentCandleIndex];
-        if (!candle) {
-            this.stop();
-            return;
-        }
+    private pollTicks() {
+        const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const elapsedTime = (now - this.candleStartTime) * this.playbackSpeed;
 
-        // Get current tick data
-        const price = this.pricePath[this.currentTickIndex];
-        const volume = this.volumePath[this.currentTickIndex];
+        let ticksFiredThisPoll = 0;
 
-        // ✅ FIX: Calculate ACTUAL candle duration from data (not hardcoded 60s)
-        const nextCandle = this.candles[this.currentCandleIndex + 1];
-        const candleDuration = nextCandle
-            ? (nextCandle.t - candle.t) // Actual duration between candles
-            : 60000; // Fallback to 1 minute if last candle
+        while (this.currentTickIndex < this.tickSchedule.length) {
+            const tick = this.tickSchedule[this.currentTickIndex];
 
-        const tickProgress = this.currentTickIndex / this.numTicks;
-        const timestamp = candle.t + (tickProgress * candleDuration);
-
-        // ✅ NEW: Timeframe verification - check for anomalies
-        if (this.currentTickIndex === 0 && this.currentCandleIndex > 0) {
-            const prevCandle = this.candles[this.currentCandleIndex - 1];
-            const actualDuration = candle.t - prevCandle.t;
-            const expectedDuration = this.expectedCandleDuration;
-
-            // Allow 10% tolerance for timeframe drift
-            const tolerance = expectedDuration * 0.1;
-            if (Math.abs(actualDuration - expectedDuration) > tolerance) {
-                console.warn(
-                    `[SimulationWorker] ⚠️ Timeframe anomaly detected at candle ${this.currentCandleIndex}: ` +
-                    `expected ${(expectedDuration / 1000).toFixed(0)}s, got ${(actualDuration / 1000).toFixed(0)}s`
-                );
+            if (tick.targetTime > elapsedTime) {
+                break; // Not yet time
             }
+
+            // Anti-burst throttle
+            if (ticksFiredThisPoll >= this.MAX_TICKS_PER_POLL) {
+                console.warn('[SimWorker] ⚠️ Tick burst throttled');
+                break;
+            }
+
+            this.fireTick(tick);
+            this.currentTickIndex++;
+            ticksFiredThisPoll++;
         }
 
-        // Create tick data
-        const tick: TickData = {
-            price,
-            volume,
-            timestamp: Math.floor(timestamp),
-            candleIndex: this.currentCandleIndex,
-            tickIndex: this.currentTickIndex,
-        };
+        // Check if candle complete
+        if (this.currentTickIndex >= this.tickSchedule.length) {
+            this.advanceToNextCandle();
+        }
+    }
 
-        // Update aggregated candle with current tick's price AND timestamp
-        this.updateAggregatedCandle(price, timestamp);
+    private fireTick(tick: TickSchedule) {
+        const candle = this.candles[this.currentCandleIndex];
+        const timestamp = candle.t + tick.targetTime;
 
-        // ✅ FIX: Sync candle updates with tick tempo (speed-independent)
-        const isFirstTick = this.currentTickIndex === 0;
-        const isLastTick = this.currentTickIndex >= this.numTicks - 1;
+        this.updateAggregatedCandle(tick.price);
 
-        // TICK throttling (for orderbook/tape - keep 60 FPS limit)
-        const now = Date.now();
-        const timeSinceLastTick = now - this.lastMessageTime;
-        const shouldSendTick =
-            timeSinceLastTick >= this.MESSAGE_THROTTLE_MS ||
-            isFirstTick ||
-            isLastTick;
-
-        if (shouldSendTick) {
-            postMessage({ type: 'TICK', data: tick });
-            this.lastMessageTime = now;
+        // 🔍 DEBUG: Log first 5 ticks to check timestamp consistency
+        if (tick.tickIndex < 5) {
+            console.log(`[Worker] 🔍 Tick ${tick.tickIndex}: candleTime=${this.currentAggregatedCandle?.time}, price=${tick.price.toFixed(2)}, tickTime=${Math.floor(timestamp)}`);
         }
 
-        // ✅ CANDLE UPDATE: Send on every tick (no extra throttling needed!)
-        // Ticks are already rate-limited (1/second at 1x), so no need for time-based throttle
-        // This ensures chart never freezes while orderbook updates
+        postMessage({
+            type: 'TICK',
+            data: {
+                price: tick.price,
+                volume: tick.volume,
+                timestamp: Math.floor(timestamp),
+                candleIndex: this.currentCandleIndex,
+                tickIndex: tick.tickIndex
+            }
+        });
 
-        const shouldSendCandleUpdate =
-            isFirstTick ||  // Always send on candle open
-            isLastTick ||   // Always send on candle close  
-            true;           // Send on EVERY tick for smooth growth
+        // 🔥 FIX: Throttle CANDLE_UPDATE to prevent barcode effect
+        // Send updates only on: first tick, every 10th tick, and last tick
+        // This prevents Lightweight Charts from creating 60+ candles per minute
+        const isFirstTick = tick.tickIndex === 0;
+        const isLastTick = tick.tickIndex === this.tickSchedule.length - 1;
+        const isBatchUpdate = tick.tickIndex % 10 === 0; // Every 10th tick
 
-        if (shouldSendCandleUpdate && this.currentAggregatedCandle) {
+        if (this.currentAggregatedCandle && (isFirstTick || isLastTick || isBatchUpdate)) {
+            // 🔍 DEBUG: Log candle updates to detect timestamp changes
+            if (tick.tickIndex < 5 || tick.tickIndex % 20 === 0) {
+                console.log(`[Worker] 📊 CANDLE_UPDATE #${tick.tickIndex}: time=${this.currentAggregatedCandle.time}, O=${this.currentAggregatedCandle.open.toFixed(2)}, H=${this.currentAggregatedCandle.high.toFixed(2)}, L=${this.currentAggregatedCandle.low.toFixed(2)}, C=${this.currentAggregatedCandle.close.toFixed(2)}`);
+            }
+
             postMessage({
                 type: 'CANDLE_UPDATE',
                 candle: this.currentAggregatedCandle
             });
+
+            // 🔍 CHECKPOINT 1: Worker output
+            console.log(`[Worker→] CANDLE_UPDATE sent: time=${this.currentAggregatedCandle.time}, C=${this.currentAggregatedCandle.close.toFixed(2)}`);
+        }
+    }
+
+    private advanceToNextCandle() {
+        // 🔥 NEW: Track session candles for context analysis
+        if (this.historyBuffer.length > 0) {
+            this.sessionCandles.push(this.candles[this.currentCandleIndex]);
         }
 
-        // Advance tick
-        this.currentTickIndex++;
+        this.currentTickIndex = 0;
+        this.currentCandleIndex++;
 
-        // Check if candle is complete
-        if (this.currentTickIndex >= this.numTicks) {
-            this.currentTickIndex = 0;
-            this.currentCandleIndex++;
-
-            // Check if simulation is complete
-            if (this.currentCandleIndex >= this.candles.length) {
-                console.log('[SimulationWorker] Simulation complete');
-                postMessage({ type: 'COMPLETE' });
-                this.stop();
-                return;
-            }
-
-            // Generate paths for next candle
-            this.regeneratePaths();
-
-            // ✅ NEW: Restart tick loop to apply new volume-based pacing
-            // Each candle has different volume, so tick interval should change
-            this.stopTickLoop();
-            this.startTickLoop();
-
-            postMessage({ type: 'CANDLE_CHANGE', candleIndex: this.currentCandleIndex });
+        if (this.currentCandleIndex >= this.candles.length) {
+            console.log('[SimWorker] ✅ Simulation complete');
+            postMessage({ type: 'COMPLETE' });
+            this.stop();
+            return;
         }
+
+        this.initializeAggregatedCandle();
+        this.stopTickLoop();
+        this.startTickLoop();
+
+        postMessage({ type: 'CANDLE_CHANGE', candleIndex: this.currentCandleIndex });
     }
 }
 
@@ -1436,8 +1054,19 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
 
     switch (type) {
         case 'INIT_DATA':
+            // Support both legacy and smart buffering formats
             if (candles) {
+                // Legacy format: single candles array
                 engine.initData(candles);
+            } else if (event.data.historyBuffer && event.data.simulationQueue) {
+                // 🔥 NEW: Smart buffering format
+                engine.initDataWithBuffers(
+                    event.data.historyBuffer,
+                    event.data.simulationQueue,
+                    event.data.interval || '1m'
+                );
+            } else {
+                console.error('[SimWorker] INIT_DATA missing required data');
             }
             break;
 
@@ -1467,7 +1096,7 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
 
         case 'CALCULATE_INDICATOR':
             if (candles && indicator) {
-                console.log(`[SimulationWorker] Calculating indicator: ${indicator.name}`);
+                console.log(`[SimWorker] Calculating indicator: ${indicator.name}`);
                 const data = calculateIndicator(candles, indicator);
                 postMessage({
                     type: 'INDICATOR_READY',
@@ -1475,15 +1104,14 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
                     data
                 });
             } else {
-                console.error('[SimulationWorker] CALCULATE_INDICATOR missing candles or indicator config');
+                console.error('[SimWorker] CALCULATE_INDICATOR missing params');
             }
             break;
 
         default:
-            console.warn('[SimulationWorker] Unknown message type:', type);
+            console.warn('[SimWorker] Unknown message type:', type);
     }
 };
 
-// Ready signal
 postMessage({ type: 'READY' });
-console.log('[SimulationWorker] Worker ready');
+console.log('[SimWorker] 🚀 Worker ready');

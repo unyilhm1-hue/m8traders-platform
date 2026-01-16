@@ -28,93 +28,60 @@ function SimDemoPageContent() {
     // ✅ Track initialization to prevent loop
     const hasInitialized = useRef(false);
 
+    // 🔥 NEW: Dynamic ticker state (replaces hardcoded 'ADRO')
+    const [selectedTicker, setSelectedTicker] = useState('ADRO');  // Default to ADRO for backward compatibility
+
     // ✅ Subscribe to real-time price from simulation store
     const currentPrice = useCurrentPrice();
 
-    // 🚀 AUTO-LOAD DATA ON PAGE MOUNT WITH RANDOM ENTRY POINT
+    // 🚀 AUTO-LOAD DATA ON PAGE MOUNT WITH SMART BUFFERING
     useEffect(() => {
         const initSimulation = async () => {
             try {
-                console.log('� [SimDemoPage] Fetching simulation data...');
-                const response = await fetch('/api/simulation/start');
+                // 🔥 NEW: Use smart buffering API
+                console.log('[SimDemoPage] Fetching simulation data with smart buffering...');
+
+                // 🔥 UPDATED: Use dynamic selectedTicker instead of hardcoded 'ADRO'
+                const ticker = selectedTicker;
+                const targetDate = '2026-01-15';  // TODO: Support date selection
+                const interval = '1m';             // TODO: Support interval switching
+
+                const response = await fetch(
+                    `/api/simulation/load?ticker=${ticker}&date=${targetDate}&interval=${interval}`
+                );
+
                 const result = await response.json();
 
                 if (!result.success || !result.data) {
-                    throw new Error('Failed to fetch');
+                    console.error('[SimDemoPage] Failed to load data:', result.error);
+                    throw new Error(result.error || 'Failed to fetch simulation data');
                 }
 
-                const { candles, ticker } = result.data; // Data mentah (30 hari)
-                console.log(`✅ [SimDemoPage] Loaded ${candles.length} candles for ${ticker}`);
+                const { historyBuffer, simulationQueue, interval: loadedInterval, wasAggregated } = result.data;
 
+                console.log(`✅ [SimDemoPage] Smart buffering data loaded:`);
+                console.log(`   - History: ${historyBuffer.length} candles (for context warm-up)`);
+                console.log(`   - Simulation: ${simulationQueue.length} candles (to animate)`);
+                console.log(`   - Interval: ${loadedInterval}`);
+                console.log(`   - Aggregated: ${wasAggregated ? 'Yes' : 'No'}`);
 
-                // --- LOGIKA RANDOM ENTRY POINT (WIB SYNCED) ---
-
-                // 1. Ambil daftar tanggal unik dengan ZONA WAKTU JAKARTA (WIB)
-                // Ini penting agar daftar tanggal di sini COCOK dengan filter di Store
-                const uniqueDates: string[] = Array.from(
-                    new Set(
-                        candles.map((c: any) => {
-                            // Normalisasi timestamp
-                            const ts = c.t > 10000000000 ? c.t / 1000 : c.t;
-                            const dateObj = new Date(ts * 1000);
-
-                            // Force format YYYY-MM-DD sesuai WIB
-                            return dateObj.toLocaleDateString('en-CA', {
-                                timeZone: 'Asia/Jakarta'
-                            });
-                        })
-                    )
-                ).sort() as string[];
-
-                console.log(`📅 [SimDemoPage] Total Data Tersedia (WIB): ${uniqueDates.length} hari`);
-                console.log(`   Date Range (WIB): ${uniqueDates[0]} to ${uniqueDates[uniqueDates.length - 1]}`);
-
-                // 2. Tentukan Buffer History (Misal: Wajib punya 5 hari ke belakang)
-                const MIN_HISTORY_DAYS = 5;
-
-                let randomTargetDate: string;
-
-                if (uniqueDates.length <= MIN_HISTORY_DAYS) {
-                    console.warn('⚠️ [SimDemoPage] Data too short for random entry, using middle date');
-                    // Fallback ke hari tengah
-                    randomTargetDate = uniqueDates[Math.floor(uniqueDates.length / 2)];
-                } else {
-                    // 3. Pilih Tanggal Acak (Mulai dari hari ke-6 sampai hari terakhir - 1)
-                    // Ini menjamin chart selalu punya history minimal 5 hari ke belakang
-                    const validStartIndex = MIN_HISTORY_DAYS;
-                    const maxIndex = uniqueDates.length - 2; // Sisakan 1 hari di depan buat jaga-jaga
-
-                    const randomIndex = Math.floor(Math.random() * (maxIndex - validStartIndex + 1)) + validStartIndex;
-                    randomTargetDate = uniqueDates[randomIndex];
-
-                    console.log(`🎲 [SimDemoPage] Random Start (WIB): ${randomTargetDate} (Hari ke-${randomIndex + 1}/${uniqueDates.length})`);
+                // Load history candles to chart (for visual context)
+                const setCandleHistory = useSimulationStore.getState().setCandleHistory;
+                if (historyBuffer && historyBuffer.length > 0) {
+                    setCandleHistory(historyBuffer);
+                    console.log(`📊 [SimDemoPage] Loaded ${historyBuffer.length} history candles to chart`);
                 }
 
-                // 4. Load ke Store menggunakan Tanggal Acak tersebut
-                // Store otomatis akan menjadikan semua data SEBELUM tanggal ini sebagai History
-                const loadSimulationDay = useSimulationStore.getState().loadSimulationDay;
-                const storeResult = loadSimulationDay(randomTargetDate, candles);
+                // 🔥 NEW: Send split buffers to worker via initWithBuffers
+                if (engine && simulationQueue.length > 0) {
+                    console.log(`📨 [SimDemoPage] Sending split buffers to worker...`);
+                    engine.initWithBuffers({
+                        historyBuffer,
+                        simulationQueue,
+                        interval: loadedInterval
+                    });
 
-                if (storeResult.error || storeResult.simCount === 0) {
-                    console.warn(`⚠️ [SimDemoPage] No simulation data for ${randomTargetDate}, simCount=${storeResult.simCount}`);
-                    console.log('💡 [SimDemoPage] Chart will show history only, Play button will be disabled');
-                    return;
-                }
-
-                console.log(`✅ [SimDemoPage] Data split complete:`);
-                console.log(`   - History: ${storeResult.historyCount} candles (chart context)`);
-                console.log(`   - Simulation: ${storeResult.simCount} candles (for playback)`);
-
-                // 5. Load ke Worker (Hanya data market hours yang sudah difilter Store)
-                const simulationCandles = useSimulationStore.getState().simulationCandles;
-
-                // ✅ Send to worker via engine.initWithData
-                if (engine && simulationCandles.length > 0) {
-                    console.log(`📨 [SimDemoPage] Sending ${simulationCandles.length} candles to worker...`);
-                    engine.initWithData(simulationCandles);
-
-                    // ✅ FIX: Set ready state untuk trigger auto-play via useEffect
-                    // Hapus setTimeout race condition
+                    // Set ready state for auto-play
                     setIsWorkerDataReady(true);
                 } else if (!engine) {
                     console.warn('⚠️ [SimDemoPage] Engine not ready yet');
@@ -127,7 +94,7 @@ function SimDemoPageContent() {
             }
         };
 
-        // ✅ FIX: Run only once, prevent loop
+        // ✅ Run only once, prevent loop
         if (hasInitialized.current) return;
 
         if (!engine || !isReady) {
@@ -135,10 +102,10 @@ function SimDemoPageContent() {
             return;
         }
 
-        console.log('[SimDemoPage] Worker ready, starting initialization...');
+        console.log('[SimDemoPage] Worker ready, starting smart buffering initialization...');
         initSimulation();
         hasInitialized.current = true;
-    }, [isReady]); // Depend on isReady to trigger when worker becomes available
+    }, [isReady, engine, selectedTicker]); // 🔥 UPDATED: Added selectedTicker dependency to reload when ticker changes
 
     // ✅ FIX: Event-driven auto-play (no race condition)
     // Trigger play ONLY after DATA_READY confirmed

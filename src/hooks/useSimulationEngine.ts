@@ -85,6 +85,8 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
                     case 'CANDLE_UPDATE':
                         // Update current live candle in store (for chart)
                         if (event.data.candle) {
+                            // 🔍 CHECKPOINT 2: Hook reception
+                            console.log(`[Hook→] Received: time=${event.data.candle.time}, C=${event.data.candle.close.toFixed(2)}`);
                             updateCurrentCandle(event.data.candle);
                         }
                         break;
@@ -230,6 +232,25 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
         }
     }, []);
 
+    // 🔥 NEW: Initialize worker with smart buffering (historyBuffer + simulationQueue)
+    const initWithBuffers = useCallback((params: {
+        historyBuffer: any[];
+        simulationQueue: any[];
+        interval: string;
+    }) => {
+        if (workerRef.current) {
+            console.log(`[useSimulationEngine] 🧊 Smart Buffering: ${params.historyBuffer.length} history + ${params.simulationQueue.length} simulation`);
+            workerRef.current.postMessage({
+                type: 'INIT_DATA',
+                historyBuffer: params.historyBuffer,
+                simulationQueue: params.simulationQueue,
+                interval: params.interval,
+            });
+        } else {
+            console.warn('[useSimulationEngine] Worker not ready yet, cannot init with buffers');
+        }
+    }, []);
+
     return {
         play,
         pause,
@@ -237,7 +258,8 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
         setSpeed,
         seek,
         reload,
-        initWithData, // ✅ New method for external data initialization
-        isReady, // ✅ Reactive state
+        initWithData,      // Legacy method
+        initWithBuffers,   // 🔥 NEW: Smart buffering method
+        isReady,
     };
 }

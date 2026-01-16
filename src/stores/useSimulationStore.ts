@@ -432,6 +432,8 @@ export const useSimulationStore = create<SimulationState>()(
 
         updateCurrentCandle(candle) {
             set((state) => {
+                // 🔍 CHECKPOINT 3: Store update
+                console.log(`[Store→] time=${candle.time}, C=${candle.close.toFixed(2)}`);
                 state.currentCandle = candle;
             });
         },
