@@ -18,6 +18,10 @@ const dataCache = new Map<string, CacheEntry>();
 // Cache expiration time (15 minutes)
 const CACHE_TTL = 15 * 60 * 1000;
 
+// 🚀 PERFORMANCE FIX: In-flight request deduplication
+// Prevents multiple simultaneous requests for the same data
+const inflightRequests = new Map<string, Promise<Candle[]>>();
+
 /**
  * Generate cache key
  */
@@ -168,6 +172,8 @@ export async function fetchStockData(
     ticker: string,
     timeframe: Timeframe = '5m'
 ): Promise<Candle[]> {
+    const key = getCacheKey(ticker, timeframe);
+
     // 1. Check cache first
     const cached = getCachedData(ticker, timeframe);
     if (cached) {
@@ -175,27 +181,47 @@ export async function fetchStockData(
         return cached;
     }
 
-    // 2. Try API (will be null until API route is implemented)
-    const apiData = await fetchFromAPI(ticker, timeframe);
-    if (apiData && apiData.data.length > 0) {
-        console.log(`[DataService] Fetched from API: ${ticker} ${timeframe}`);
-        updateCache(ticker, timeframe, apiData.data);
-        return apiData.data;
+    // 🚀 PERFORMANCE FIX: Check if request is already in-flight
+    const existing = inflightRequests.get(key);
+    if (existing) {
+        console.log(`[DataService] Deduping in-flight request for ${ticker} ${timeframe}`);
+        return existing;
     }
 
-    // 3. IDX 2025 Generated Data (if IDX ticker) - NEW
-    if (isIDXTicker(ticker)) {
-        console.log(`[DataService] Generating IDX 2025 data: ${ticker} ${timeframe}`);
-        const idx2025 = generateIDX2025Data(ticker, timeframe);
-        updateCache(ticker, timeframe, idx2025);
-        return idx2025;
-    }
+    // Create new request promise
+    const requestPromise = (async () => {
+        try {
+            // 2. Try API (will be null until API route is implemented)
+            const apiData = await fetchFromAPI(ticker, timeframe);
+            if (apiData && apiData.data.length > 0) {
+                console.log(`[DataService] Fetched from API: ${ticker} ${timeframe}`);
+                updateCache(ticker, timeframe, apiData.data);
+                return apiData.data;
+            }
 
-    // 4. Fallback to generated sample data (for US tickers)
-    console.log(`[DataService] Using generated sample data for ${ticker} ${timeframe}`);
-    const sampleData = generateTimeframeData(ticker, timeframe);
-    updateCache(ticker, timeframe, sampleData);
-    return sampleData;
+            // 3. IDX 2025 Generated Data (if IDX ticker) - NEW
+            if (isIDXTicker(ticker)) {
+                console.log(`[DataService] Generating IDX 2025 data: ${ticker} ${timeframe}`);
+                const idx2025 = generateIDX2025Data(ticker, timeframe);
+                updateCache(ticker, timeframe, idx2025);
+                return idx2025;
+            }
+
+            // 4. Fallback to generated sample data (for US tickers)
+            console.log(`[DataService] Using generated sample data for ${ticker} ${timeframe}`);
+            const sampleData = generateTimeframeData(ticker, timeframe);
+            updateCache(ticker, timeframe, sampleData);
+            return sampleData;
+        } finally {
+            // Clean up in-flight map
+            inflightRequests.delete(key);
+        }
+    })();
+
+    // Store in-flight request
+    inflightRequests.set(key, requestPromise);
+
+    return requestPromise;
 }
 
 /**

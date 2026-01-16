@@ -136,6 +136,36 @@ const PATH_TEMPLATES: PathTemplate[] = [
 ];
 
 // ============================================================================
+// 🎯 QUICK WIN #2: Seeded PRNG for Deterministic Replay
+// ============================================================================
+
+/**
+ * Mulberry32 Seeded Pseudorandom Number Generator
+ * Fast, high-quality PRNG that produces deterministic results
+ * 
+ * @see https://github.com/bryc/code/blob/master/jshash/PRNGs.md
+ */
+class SeededRandom {
+    private seed: number;
+
+    constructor(seed: number) {
+        this.seed = seed;
+    }
+
+    /**
+     * Generate next random number in [0, 1)
+     * Deterministic based on seed
+     */
+    next(): number {
+        // Mulberry32 algorithm
+        this.seed = (this.seed + 0x6D2B79F5) | 0;
+        let t = Math.imul(this.seed ^ (this.seed >>> 15), 1 | this.seed);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    }
+}
+
+// ============================================================================
 // Market Configuration
 // ============================================================================
 
@@ -209,7 +239,35 @@ function roundToIDXTickSize(price: number): number {
 }
 
 /**
- * Check if timestamp is during lunch break
+ * 🎯 QUICK WIN #3: Check if timestamp is within market hours
+ * Harmonized with store filtering logic
+ */
+function isWithinMarketHours(timestamp: number, config: MarketConfig = DEFAULT_MARKET_CONFIG): boolean {
+    if (!config.filterEnabled) return true;
+
+    const date = new Date(timestamp);
+    const hourStr = date.toLocaleString('en-US', { hour: 'numeric', hour12: false, timeZone: config.timezone });
+    const minuteStr = date.toLocaleString('en-US', { minute: 'numeric', timeZone: config.timezone });
+    const hour = parseInt(hourStr);
+    const minute = parseInt(minuteStr);
+    const decimal = hour + minute / 60;
+
+    // Market hours: 09:00 - 16:00 WIB
+    if (decimal < config.openHour || decimal >= config.closeHour) {
+        return false;
+    }
+
+    // Lunch break: 11:30 - 13:30 WIB (11.5 - 13.5 decimal)
+    // 🎯 Harmonized with store (was 11.5-13.5, now consistent)
+    if (decimal >= config.lunchBreakStart && decimal < config.lunchBreakEnd) {
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Check if timestamp is during lunch break (legacy, kept for backward compatibility)
  */
 function isLunchBreak(timestamp: number, config: MarketConfig = DEFAULT_MARKET_CONFIG): boolean {
     if (!config.filterEnabled) return false;
@@ -219,6 +277,7 @@ function isLunchBreak(timestamp: number, config: MarketConfig = DEFAULT_MARKET_C
     const minuteStr = date.toLocaleString('en-US', { minute: 'numeric', timeZone: config.timezone });
     const hour = parseInt(hourStr) + parseInt(minuteStr) / 60;
 
+    // 🎯 QUICK WIN #3: Use config values instead of hardcoded 11.5-13.5
     return hour >= config.lunchBreakStart && hour < config.lunchBreakEnd;
 }
 
@@ -350,8 +409,15 @@ function getWaypointPrice(waypoint: PathWaypoint, candle: Candle): number {
  * - Fractal noise simulates bid/ask spread battles
  * - Magnetic pull ensures convergence to Close price
  */
+/**
+ * Generate organic price path with seeded randomness and IDX tick size compliance
+ * 
+ * 🎯 QUICK WIN #1: Apply IDX tick size rounding to all generated prices
+ * 🎯 QUICK WIN #2: Use seeded PRNG for deterministic replay
+ */
 function generateOrganicPath(
     candle: Candle,
+    candleIndex: number,  // 🎯 NEW: For seed generation
     pattern: PatternProfile,
     context: MarketContext,
     tickCount: number
@@ -364,32 +430,37 @@ function generateOrganicPath(
         return Array(tickCount).fill(candle.c);
     }
 
+    // 🎯 QUICK WIN #2: Create seeded RNG for this candle
+    const seed = candle.t + candleIndex * 1000; // Use candle timestamp and index for unique seed
+    const rng = new SeededRandom(seed);
+
     // Select template based on pattern and candle direction
-    let template: PathTemplate;
+    let selectedTemplate: PathTemplate;
 
     if (pattern.type === 'hammer') {
         // Hammer: Always drop to LOW first, then recover
-        template = PATH_TEMPLATES[0]; // OPEN -> LOW -> HIGH -> CLOSE
+        selectedTemplate = PATH_TEMPLATES[0]; // OPEN -> LOW -> HIGH -> CLOSE
     } else if (pattern.type === 'shootingStar') {
         // Shooting star: Always pump to HIGH first, then dump
-        template = PATH_TEMPLATES[1]; // OPEN -> HIGH -> LOW -> CLOSE
+        selectedTemplate = PATH_TEMPLATES[1]; // OPEN -> HIGH -> LOW -> CLOSE
     } else if (pattern.type === 'marubozu') {
         // Marubozu: Strong directional movement
         if (pattern.isBullish) {
-            template = PATH_TEMPLATES[2]; // OPEN -> HIGH -> CLOSE
+            selectedTemplate = PATH_TEMPLATES[2]; // OPEN -> HIGH -> CLOSE
         } else {
-            template = PATH_TEMPLATES[3]; // OPEN -> LOW -> CLOSE
+            selectedTemplate = PATH_TEMPLATES[3]; // OPEN -> LOW -> CLOSE
         }
     } else {
         // Neutral/Doji: Random template selection
-        const randomIdx = Math.floor(Math.random() * PATH_TEMPLATES.length);
-        template = PATH_TEMPLATES[randomIdx];
+        // 🎯 QUICK WIN #2: Use seeded random instead of Math.random()
+        const templateIndex = Math.floor(rng.next() * PATH_TEMPLATES.length);
+        selectedTemplate = PATH_TEMPLATES[templateIndex];
     }
 
-    console.log(`[OrganicPath] Pattern: ${pattern.type}, Template: ${template.description}, Ticks: ${tickCount}`);
+    console.log(`[OrganicPath] Pattern: ${pattern.type}, Template: ${selectedTemplate.description}, Ticks: ${tickCount}`);
 
     // Build waypoint anchors with tick positions
-    const waypoints = template.waypoints;
+    const waypoints = selectedTemplate.waypoints;
     const segmentSize = Math.floor(tickCount / (waypoints.length - 1));
 
     interface Anchor {
@@ -404,7 +475,7 @@ function generateOrganicPath(
 
     // 🔥 CRITICAL FIX: Ensure first tick is ALWAYS at OPEN price
     // This is essential for seamless transitions (candle must start from OPEN, not HIGH/LOW)
-    path[0] = candle.o;
+    path[0] = roundToIDXTickSize(candle.o); // 🎯 QUICK WIN #1: Apply tick size rounding
 
     // Interpolate between anchors with fractal noise and magnetic pull
     // Start from i=1 since path[0] is already set to OPEN
@@ -415,7 +486,7 @@ function generateOrganicPath(
 
         if (!beforeAnchor || !afterAnchor) {
             // Edge case: use close price
-            path.push(i === tickCount - 1 ? candle.c : candle.o);
+            path.push(roundToIDXTickSize(i === tickCount - 1 ? candle.c : candle.o)); // 🎯 QUICK WIN #1
             continue;
         }
 
@@ -445,11 +516,12 @@ function generateOrganicPath(
         // Strict boundaries: NEVER exceed High/Low
         price = Math.max(candle.l, Math.min(candle.h, price));
 
-        path.push(price);
+        // 🎯 QUICK WIN #1: Apply IDX tick size rounding to all prices
+        path.push(roundToIDXTickSize(price));
     }
 
     // 🔥 CRITICAL: Ensure final tick === Close (pixel-perfect)
-    path[tickCount - 1] = candle.c;
+    path[tickCount - 1] = roundToIDXTickSize(candle.c); // 🎯 QUICK WIN #1
 
     return path;
 }
@@ -462,34 +534,50 @@ function generateOrganicPath(
  * Calculate adaptive tick count based on duration and volume/ATR
  * 
  * Market Psychology:
- * - 1m candles: ~60 ticks (1 tick/second at 1x speed)
- * - Daily candles: ~500 ticks (news events, high volume)
- * - Volume scaling: High volume = more ticks (price discovery)
+ * - 1m candles: ~60 ticks (1 tick/second at 1x speed)/**
+ * Calculate adaptive tick density
+ * - More ticks for long-duration candles
+ * - More ticks for high-volume candles  
+ * - More ticks for high-volatility markets
+ * 
+ * 🚀 PERFORMANCE FIX: Scales down at high playback speeds to prevent backlog
  */
 function calculateTickDensity(
     durationMs: number,
     volume: number,
-    avgVolume: number,
-    volatility: 'low' | 'medium' | 'high'  // Updated to accept context classification
+    averageVolume: number,
+    volatility: 'low' | 'medium' | 'high',
+    playbackSpeed: number = 1  // 🚀 PERFORMANCE FIX: Add playback speed parameter
 ): number {
+    const BASE_DENSITY = 60; // ticks per minute (market baseline)
+
+    // Scale by duration (more time = more ticks)
     const durationMinutes = durationMs / 60000;
+    let tickCount = BASE_DENSITY * durationMinutes;
 
-    // Base ticks: 60 ticks per minute
-    const baseTicks = Math.max(60, Math.floor(durationMinutes * 60));
+    // Scale by volatility (more volatile = more ticks)
+    const volatilityMultipliers = { low: 0.7, medium: 1.0, high: 1.5 };
+    tickCount *= volatilityMultipliers[volatility];
 
-    // Volume multiplier: 1x (normal) to 3x (extreme volume)
-    const volumeRatio = avgVolume > 0 ? volume / avgVolume : 1;
-    const volumeMultiplier = 1 + Math.min(2.0, Math.max(0, volumeRatio - 1) * 0.5);
+    // Scale by relative volume (higher volume = more ticks)
+    if (averageVolume > 0) {
+        const volumeRatio = volume / averageVolume;
+        tickCount *= Math.max(0.5, Math.min(2.0, volumeRatio)); // Clamp 0.5x - 2x
+    }
 
-    // Volatility multiplier from context classification
-    const volatilityMultiplier =
-        volatility === 'low' ? 0.9 :
-            volatility === 'high' ? 1.2 : 1.0; // medium = 1.0
+    // 🚀 PERFORMANCE FIX: Scale down for high playback speeds
+    // Prevents tick backlog and dropped updates at 10x/25x/50x speed
+    if (playbackSpeed > 1) {
+        // Use sqrt scaling: 4x speed = 50% ticks, 25x speed = 20% ticks
+        const scaleFactor = 1 / Math.sqrt(playbackSpeed);
+        tickCount *= scaleFactor;
+    }
 
-    const finalTicks = Math.floor(baseTicks * volumeMultiplier * volatilityMultiplier);
+    // Enforce min/max bounds
+    const MIN_TICKS = 10;
+    const MAX_TICKS = 500;
 
-    // Clamp to reasonable range
-    return Math.max(30, Math.min(1000, finalTicks));
+    return Math.round(Math.max(MIN_TICKS, Math.min(MAX_TICKS, tickCount)));
 }
 
 /**
@@ -966,11 +1054,11 @@ class SimulationEngine {
             noiseLevel: 0.2
         };
 
-        // Calculate tick density
-        const tickCount = calculateTickDensity(durationMs, candle.v, this.averageVolume, context.volatility);
+        // Calculate tick density with playback speed scaling
+        const tickCount = calculateTickDensity(durationMs, candle.v, this.averageVolume, context.volatility, this.playbackSpeed);
 
         // Generate organic path with context-aware noise
-        const pricePath = generateOrganicPath(candle, pattern, context, tickCount);
+        const pricePath = generateOrganicPath(candle, this.currentCandleIndex, pattern, context, tickCount);  // 🎯 Pass currentCandleIndex for seed
         const volumePath = distributeVolume(candle.v, tickCount);
 
         // Generate normalized schedule
