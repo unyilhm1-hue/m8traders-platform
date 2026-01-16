@@ -81,6 +81,106 @@ const DEFAULT_MARKET_CONFIG: MarketConfig = {
 };
 
 /**
+ * Validate and sanitize OHLC candle data
+ * Ensures high >= max(open, close) and low <= min(open, close)
+ * @returns null if candle is completely invalid (should be skipped)
+ */
+function validateAndSanitizeOHLC(candle: Candle, index: number): Candle | null {
+    let { o, h, l, c, t, v } = candle;
+
+    // 1. Basic null/NaN check
+    if ([o, h, l, c].some(p => p === null || p === undefined || isNaN(p) || p <= 0)) {
+        console.warn(`[SimulationWorker] ⚠️ Candle ${index}: Invalid OHLC values, skipping`);
+        return null;
+    }
+
+    // 2. Fix high/low inversion (common data bug)
+    if (h < l) {
+        console.warn(`[SimulationWorker] ⚠️ Candle ${index}: high (${h}) < low (${l}), swapping`);
+        [h, l] = [l, h];
+    }
+
+    // 3. Ensure high >= max(open, close)
+    const maxOC = Math.max(o, c);
+    if (h < maxOC) {
+        console.warn(`[SimulationWorker] ⚠️ Candle ${index}: high (${h}) < max(O,C) (${maxOC}), adjusting`);
+        h = maxOC;
+    }
+
+    // 4. Ensure low <= min(open, close)
+    const minOC = Math.min(o, c);
+    if (l > minOC) {
+        console.warn(`[SimulationWorker] ⚠️ Candle ${index}: low (${l}) > min(O,C) (${minOC}), adjusting`);
+        l = minOC;
+    }
+
+    return { ...candle, o, h, l, c };
+}
+
+/**
+ * Get IDX tick size based on price
+ * IDX (Indonesia Stock Exchange) tick size rules:
+ * - Price < 200: tick size = 1
+ * - 200 <= Price < 500: tick size = 2
+ * - 500 <= Price < 2000: tick size = 5
+ * - 2000 <= Price < 5000: tick size = 10
+ * - Price >= 5000: tick size = 25
+ */
+function getIDXTickSize(price: number): number {
+    if (price < 200) return 1;
+    if (price < 500) return 2;
+    if (price < 2000) return 5;
+    if (price < 5000) return 10;
+    return 25;
+}
+
+/**
+ * Round price to nearest valid IDX tick size
+ */
+function roundToIDXTickSize(price: number): number {
+    const tickSize = getIDXTickSize(price);
+    return Math.round(price / tickSize) * tickSize;
+}
+
+/**
+ * Generate realistic orderbook with IDX-compliant tick sizes
+ * @param currentPrice - Current market price
+ * @param spread - Bid-ask spread percentage (e.g., 0.001 = 0.1%)
+ * @param depth - Number of price levels on each side
+ */
+function generateOrderbook(
+    currentPrice: number,
+    spread: number = 0.001,
+    depth: number = 5
+): { bids: Array<{ price: number; volume: number }>; asks: Array<{ price: number; volume: number }> } {
+    const bids: Array<{ price: number; volume: number }> = [];
+    const asks: Array<{ price: number; volume: number }> = [];
+
+    const tickSize = getIDXTickSize(currentPrice);
+    const halfSpread = currentPrice * spread / 2;
+
+    // Best bid/ask with spread
+    const bestBid = roundToIDXTickSize(currentPrice - halfSpread);
+    const bestAsk = roundToIDXTickSize(currentPrice + halfSpread);
+
+    // Generate bid levels (descending from best bid)
+    for (let i = 0; i < depth; i++) {
+        const price = bestBid - (i * tickSize);
+        const volume = Math.floor(1000 + Math.random() * 9000); // 1k-10k random volume
+        bids.push({ price, volume });
+    }
+
+    // Generate ask levels (ascending from best ask)
+    for (let i = 0; i < depth; i++) {
+        const price = bestAsk + (i * tickSize);
+        const volume = Math.floor(1000 + Math.random() * 9000);
+        asks.push({ price, volume });
+    }
+
+    return { bids, asks };
+}
+
+/**
  * Check if timestamp is during lunch break
  * @param timestamp - Unix timestamp in milliseconds
  * @param config - Market configuration
@@ -393,6 +493,9 @@ class SimulationEngine {
     // ✅ NEW: Market config for gap handling (configurable)
     private marketConfig: MarketConfig = DEFAULT_MARKET_CONFIG;
 
+    // ✅ NEW: Expected candle duration for timeframe verification
+    private expectedCandleDuration: number = 60000; // Will be calculated per candle
+
     constructor() {
         console.log('[SimulationWorker] Engine initialized');
     }
@@ -427,9 +530,19 @@ class SimulationEngine {
         // ✅ FIX: Sort candles by timestamp untuk ensure monotonic time
         processedCandles.sort((a, b) => a.t - b.t);
 
+        // ✅ NEW: Validate and sanitize OHLC data
+        const validatedCandles = processedCandles
+            .map((c, idx) => validateAndSanitizeOHLC(c, idx))
+            .filter((c): c is Candle => c !== null); // Remove invalid candles
+
+        const invalidCount = processedCandles.length - validatedCandles.length;
+        if (invalidCount > 0) {
+            console.warn(`[SimulationWorker] ⚠️ Filtered out ${invalidCount} invalid candles`);
+        }
+
         // ✅ NEW: Filter out lunch break candles (IDX: 11:30-13:30 WIB)
-        const beforeFilter = processedCandles.length;
-        this.candles = processedCandles.filter(c => !isLunchBreak(c.t, this.marketConfig));
+        const beforeFilter = validatedCandles.length;
+        this.candles = validatedCandles.filter(c => !isLunchBreak(c.t, this.marketConfig));
         const skippedCount = beforeFilter - this.candles.length;
 
         if (skippedCount > 0) {
@@ -441,6 +554,16 @@ class SimulationEngine {
         // ✅ NEW: Calculate average volume for volume-based pacing
         this.averageVolume = calculateAverageVolume(this.candles);
         console.log(`[SimulationWorker] 📊 Average volume: ${this.averageVolume.toLocaleString()}`);
+
+        // ✅ NEW: Calculate expected candle duration for timeframe verification
+        if (this.candles.length >= 2) {
+            const durations = [];
+            for (let i = 0; i < Math.min(10, this.candles.length - 1); i++) {
+                durations.push(this.candles[i + 1].t - this.candles[i].t);
+            }
+            this.expectedCandleDuration = durations.reduce((sum, d) => sum + d, 0) / durations.length;
+            console.log(`[SimulationWorker] ⏱️ Expected candle duration: ${(this.expectedCandleDuration / 1000).toFixed(0)}s`);
+        }
 
         this.currentCandleIndex = 0;
         this.currentTickIndex = 0;
@@ -629,6 +752,22 @@ class SimulationEngine {
 
         const tickProgress = this.currentTickIndex / this.numTicks;
         const timestamp = candle.t + (tickProgress * candleDuration);
+
+        // ✅ NEW: Timeframe verification - check for anomalies
+        if (this.currentTickIndex === 0 && this.currentCandleIndex > 0) {
+            const prevCandle = this.candles[this.currentCandleIndex - 1];
+            const actualDuration = candle.t - prevCandle.t;
+            const expectedDuration = this.expectedCandleDuration;
+
+            // Allow 10% tolerance for timeframe drift
+            const tolerance = expectedDuration * 0.1;
+            if (Math.abs(actualDuration - expectedDuration) > tolerance) {
+                console.warn(
+                    `[SimulationWorker] ⚠️ Timeframe anomaly detected at candle ${this.currentCandleIndex}: ` +
+                    `expected ${(expectedDuration / 1000).toFixed(0)}s, got ${(actualDuration / 1000).toFixed(0)}s`
+                );
+            }
+        }
 
         // Create tick data
         const tick: TickData = {
