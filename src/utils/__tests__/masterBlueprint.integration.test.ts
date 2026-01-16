@@ -14,7 +14,7 @@ describe('Master Blueprint: Phase 1 - Data Layer & Resampling', () => {
     describe('Resampling Algorithm', () => {
         // Create test data with sufficient candles (50 candles = 50 minutes)
         const testCandles: Candle[] = Array.from({ length: 50 }, (_, i) => ({
-            time: (i + 1) * 60000, // Every minute
+            time: i * 60000, // Every minute starting from 0
             open: 100 + (i % 10),
             high: 105 + (i % 10),
             low: 95 + (i % 10),
@@ -153,8 +153,10 @@ describe('Master Blueprint: Phase 2 - Organic Movement', () => {
     describe('Simplex Noise Integration', () => {
         it('should have simplex-noise package installed', async () => {
             // Check if package is available
-            const packageJson = await import('../../../package.json');
-            expect(packageJson.dependencies).toHaveProperty('simplex-noise');
+            const packageJsonModule = await import('../../../package.json');
+            // Handle both ES module default export (Vite) and direct JSON import
+            const pkg = (packageJsonModule as any).default || packageJsonModule;
+            expect(pkg.dependencies).toHaveProperty('simplex-noise');
         });
 
         // Note: Worker tests require more complex setup with worker mocking
