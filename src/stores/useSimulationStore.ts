@@ -6,8 +6,14 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import type { TickData } from '@/hooks/useSimulationWorker';
-import type { Candle } from '@/types';
-import { resampleCandles, getAvailableIntervals, type Interval, type IntervalState } from '@/utils/candleResampler';
+import type { Candle as WorkerCandle } from '@/types';
+import {
+    resampleCandles,
+    getAvailableIntervals,
+    type Interval,
+    type IntervalState,
+    type Candle as ResamplerCandle
+} from '@/utils/candleResampler';
 import { getCached, loadWithBuffer, invalidateCache, type CachedData } from '@/utils/smartBuffer';
 
 // ============================================================================
@@ -54,13 +60,13 @@ interface SimulationState {
 
     // Select Date Replay
     selectedDate: string | null; // YYYY-MM-DD format
-    simulationCandles: Candle[]; // Candles for selected date (simulation queue)
+    simulationCandles: WorkerCandle[]; // Candles for selected date (simulation queue)
 
     // 🆕 Master Blueprint: Data Layer & Resampling
     baseInterval: Interval;             // Current base interval (e.g., '1m', '5m')
-    baseData: Candle[];                 // Original data at base interval (King)
-    bufferData: Candle[];               // Historical buffer for indicators
-    cachedIntervals: Map<Interval, Candle[]>;  // Resampled intervals cache
+    baseData: ResamplerCandle[];        // Original data at base interval (King)
+    bufferData: ResamplerCandle[];      // Historical buffer for indicators
+    cachedIntervals: Map<Interval, ResamplerCandle[]>;  // Resampled intervals cache
     currentTicker: string;              // Current ticker symbol
 
     // Orderbook simulation (Level 2)
@@ -88,9 +94,9 @@ interface SimulationState {
 
     // Actions
     pushTick: (tick: TickData) => void;
-    setCandleHistory: (candles: Candle[]) => void; // Set initial history from worker
+    setCandleHistory: (candles: WorkerCandle[]) => void; // Set initial history from worker
     updateCurrentCandle: (candle: ChartCandle) => void; // Update live candle
-    loadSimulationDay: (date: string, allCandles: Candle[]) => { historyCount: number; simCount: number; error: string | null }; // NEW: Smart data split
+    loadSimulationDay: (date: string, allCandles: WorkerCandle[]) => { historyCount: number; simCount: number; error: string | null }; // NEW: Smart data split
     reset: () => void;
     setOrderbookDepth: (depth: number) => void;
     setMarketConfig: (config: Partial<SimulationState['marketConfig']>) => void; // ✅ FIX 2: New action
@@ -98,7 +104,7 @@ interface SimulationState {
 
     // 🆕 Master Blueprint: New Actions
     loadWithSmartBuffer: (ticker: string, startDate: Date, interval: Interval) => Promise<void>;
-    switchInterval: (targetInterval: Interval) => Candle[];
+    switchInterval: (targetInterval: Interval) => ResamplerCandle[];
     getIntervalStates: () => IntervalState[];
     clearIntervalCache: () => void;
 }
@@ -125,9 +131,9 @@ const initialState = {
 
     // 🆕 Master Blueprint: Data Layer defaults
     baseInterval: '1m' as Interval,
-    baseData: [],
-    bufferData: [],
-    cachedIntervals: new Map<Interval, Candle[]>(),
+    baseData: [] as ResamplerCandle[],
+    bufferData: [] as ResamplerCandle[],
+    cachedIntervals: new Map<Interval, ResamplerCandle[]>(),
     currentTicker: '',
 
     orderbookBids: [],
@@ -657,11 +663,11 @@ export const useSimulationStore = create<SimulationState>()(
         },
 
         // 🆕 Master Blueprint: Switch interval with client-side resampling
-        switchInterval(targetInterval) {
-            const state = useSimulationStore.getState();
+        switchInterval(targetInterval): Candle[] {
+            const state: SimulationState = useSimulationStore.getState();
 
             // Check if already cached
-            const cached = state.cachedIntervals.get(targetInterval);
+            const cached: Candle[] | undefined = state.cachedIntervals.get(targetInterval);
             if (cached) {
                 console.log(`[Store] ✅ Using cached ${targetInterval} data (${cached.length} candles)`);
 
@@ -669,7 +675,7 @@ export const useSimulationStore = create<SimulationState>()(
                 set((state) => {
                     state.baseInterval = targetInterval;
                     // Update chart history with resampled candles
-                    state.candleHistory = cached.map(c => ({
+                    state.candleHistory = cached.map((c: Candle) => ({
                         time: typeof c.time === 'number' ? c.time / 1000 : Math.floor(new Date(c.time).getTime() / 1000),
                         open: c.open,
                         high: c.high,
@@ -696,7 +702,7 @@ export const useSimulationStore = create<SimulationState>()(
                     state.baseInterval = targetInterval;
 
                     // Update chart history with resampled candles
-                    state.candleHistory = resampled.map(c => ({
+                    state.candleHistory = resampled.map((c: Candle) => ({
                         time: typeof c.time === 'number' ? c.time / 1000 : Math.floor(new Date(c.time).getTime() / 1000),
                         open: c.open,
                         high: c.high,
@@ -715,8 +721,8 @@ export const useSimulationStore = create<SimulationState>()(
         },
 
         // 🆕 Master Blueprint: Get interval button states
-        getIntervalStates() {
-            const state = useSimulationStore.getState();
+        getIntervalStates(): IntervalState[] {
+            const state: SimulationState = useSimulationStore.getState();
             return getAvailableIntervals(state.baseInterval, state.baseData);
         },
 
@@ -732,16 +738,16 @@ export const useSimulationStore = create<SimulationState>()(
 
 // ============================================================================
 // Selector hooks for better performance
-export const useCurrentTick = () => useSimulationStore((s) => s.currentTick);
-export const useCurrentPrice = () => useSimulationStore((s) => s.currentPrice);
-export const usePriceChange = () => useSimulationStore((s) => ({
+export const useCurrentTick = () => useSimulationStore((s: SimulationState) => s.currentTick);
+export const useCurrentPrice = () => useSimulationStore((s: SimulationState) => s.currentPrice);
+export const usePriceChange = () => useSimulationStore((s: SimulationState) => ({
     change: s.priceChange,
     percent: s.priceChangePercent,
 }));
-export const useCandleHistory = () => useSimulationStore((s) => s.candleHistory);
-export const useCurrentCandle = () => useSimulationStore((s) => s.currentCandle);
-export const useSelectedDate = () => useSimulationStore((s) => s.selectedDate);
-export const useSimulationCandles = () => useSimulationStore((s) => s.simulationCandles);
+export const useCandleHistory = () => useSimulationStore((s: SimulationState) => s.candleHistory);
+export const useCurrentCandle = () => useSimulationStore((s: SimulationState) => s.currentCandle);
+export const useSelectedDate = () => useSimulationStore((s: SimulationState) => s.selectedDate);
+export const useSimulationCandles = () => useSimulationStore((s: SimulationState) => s.simulationCandles);
 
 // ✅ FIX: Use individual selectors to avoid object re-creation
 export const useOrderbookBids = () => useSimulationStore((state) => state.orderbookBids);
