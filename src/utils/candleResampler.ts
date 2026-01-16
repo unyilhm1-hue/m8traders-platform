@@ -36,6 +36,35 @@ export interface ResampledCandle extends Candle {
 export type Interval = '1m' | '2m' | '5m' | '15m' | '30m' | '60m' | '1h' | '4h' | '1d';
 
 /**
+ * 🚀 NORMALIZATION: Convert WorkerCandle {t,o,h,l,c,v} to ResamplerCandle {time,open,high,low,close,volume}
+ * 
+ * This utility ensures compatibility when data comes from APIs using short-name schema
+ */
+export function normalizeCandle(candle: any): Candle {
+    // If already normalized, return as-is
+    if ('time' in candle && 'open' in candle) {
+        return candle as Candle;
+    }
+
+    // Convert from worker schema {t,o,h,l,c,v} to resampler schema
+    return {
+        time: candle.t ?? candle.time ?? Date.now(),
+        open: candle.o ?? candle.open ?? 0,
+        high: candle.h ?? candle.high ?? 0,
+        low: candle.l ?? candle.low ?? 0,
+        close: candle.c ?? candle.close ?? 0,
+        volume: candle.v ?? candle.volume ?? 0,
+    };
+}
+
+/**
+ * Batch normalize array of candles
+ */
+export function normalizeCandles(candles: any[]): Candle[] {
+    return candles.map(normalizeCandle);
+}
+
+/**
  * Interval compatibility matrix
  * Key: source interval, Value: compatible target intervals
  */
@@ -92,9 +121,24 @@ export function canSwitch(
 
 /**
  * Parse time string or number to timestamp
+ * 
+ * 🚀 DEFENSIVE: Guard against undefined/null values
  */
-function parseTime(time: string | number): number {
-    if (typeof time === 'number') return time;
+function parseTime(time: string | number | undefined): number {
+    // Guard against undefined/null
+    if (time === undefined || time === null) {
+        console.warn('[Resampler] parseTime received undefined/null, using current time');
+        return Date.now();
+    }
+
+    // 🔥 FIX: Normalize timestamp units (ms vs s ambiguity)
+    if (typeof time === 'number') {
+        // If number is too small, it's likely in seconds not milliseconds
+        // Timestamps after 2001-09-09 are > 1_000_000_000 in seconds
+        // In milliseconds they're always > 1_000_000_000_000
+        const THRESHOLD = 10_000_000_000; // ~2286 in seconds, ~1973 in ms
+        return time < THRESHOLD ? time * 1000 : time;
+    }
 
     // Handle HH:MM or HH:MM:SS format
     if (time.includes(':')) {

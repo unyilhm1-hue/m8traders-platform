@@ -5,6 +5,7 @@
 
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
+import { enableMapSet } from 'immer';
 import type { TickData } from '@/hooks/useSimulationWorker';
 import type { Candle as WorkerCandle } from '@/types';
 import {
@@ -15,6 +16,9 @@ import {
     type Candle as ResamplerCandle
 } from '@/utils/candleResampler';
 import { getCached, loadWithBuffer, invalidateCache, type CachedData } from '@/utils/smartBuffer';
+
+// 🚀 FIX: Enable MapSet plugin for Immer to support Map in store
+enableMapSet();
 
 // ============================================================================
 // Types
@@ -474,7 +478,7 @@ export const useSimulationStore = create<SimulationState>()(
 
             // --- 1. SETTING BATAS WAKTU BASED ON CONFIGURED TIMEZONE ---
             const historyContext: ChartCandle[] = [];
-            const simulationQueue: Candle[] = [];
+            const simulationQueue: WorkerCandle[] = [];
 
             allCandles.forEach((c: any) => {
                 // A. Normalisasi Timestamp (Pastikan Detik vs Milidetik aman)
@@ -663,11 +667,11 @@ export const useSimulationStore = create<SimulationState>()(
         },
 
         // 🆕 Master Blueprint: Switch interval with client-side resampling
-        switchInterval(targetInterval): Candle[] {
+        switchInterval(targetInterval): ResamplerCandle[] {
             const state: SimulationState = useSimulationStore.getState();
 
             // Check if already cached
-            const cached: Candle[] | undefined = state.cachedIntervals.get(targetInterval);
+            const cached: ResamplerCandle[] | undefined = state.cachedIntervals.get(targetInterval);
             if (cached) {
                 console.log(`[Store] ✅ Using cached ${targetInterval} data (${cached.length} candles)`);
 
@@ -675,13 +679,19 @@ export const useSimulationStore = create<SimulationState>()(
                 set((state) => {
                     state.baseInterval = targetInterval;
                     // Update chart history with resampled candles
-                    state.candleHistory = cached.map((c: Candle) => ({
-                        time: typeof c.time === 'number' ? c.time / 1000 : Math.floor(new Date(c.time).getTime() / 1000),
-                        open: c.open,
-                        high: c.high,
-                        low: c.low,
-                        close: c.close
-                    }));
+                    // 🔥 FIX: Don't divide if time is already in seconds (< 10 billion)
+                    state.candleHistory = cached.map((c: ResamplerCandle) => {
+                        const timeInMs = typeof c.time === 'number' ? c.time : new Date(c.time).getTime();
+                        const timeInSeconds = timeInMs > 10_000_000_000 ? timeInMs / 1000 : timeInMs;
+
+                        return {
+                            time: timeInSeconds,
+                            open: c.open,
+                            high: c.high,
+                            low: c.low,
+                            close: c.close
+                        };
+                    });
                 });
 
                 console.log(`[Store] 📊 Chart updated with ${cached.length} ${targetInterval} candles`);
@@ -702,13 +712,19 @@ export const useSimulationStore = create<SimulationState>()(
                     state.baseInterval = targetInterval;
 
                     // Update chart history with resampled candles
-                    state.candleHistory = resampled.map((c: Candle) => ({
-                        time: typeof c.time === 'number' ? c.time / 1000 : Math.floor(new Date(c.time).getTime() / 1000),
-                        open: c.open,
-                        high: c.high,
-                        low: c.low,
-                        close: c.close
-                    }));
+                    // 🔥 FIX: Don't divide if time is already in seconds
+                    state.candleHistory = resampled.map((c: ResamplerCandle) => {
+                        const timeInMs = typeof c.time === 'number' ? c.time : new Date(c.time).getTime();
+                        const timeInSeconds = timeInMs > 10_000_000_000 ? timeInMs / 1000 : timeInMs;
+
+                        return {
+                            time: timeInSeconds,
+                            open: c.open,
+                            high: c.high,
+                            low: c.low,
+                            close: c.close
+                        };
+                    });
                 });
 
                 console.log(`[Store] ✅ Resampled ${state.baseInterval} → ${targetInterval} (${resampled.length} candles)`);

@@ -11,7 +11,8 @@
  */
 
 import { useEffect, useState, useCallback } from 'react';
-import { useSimulationStore } from '@/stores';
+import { useSimulationStore } from '@/stores/useSimulationStore';
+import { useTradingStore } from '@/stores/useTradingStore';
 import type { Interval, IntervalState } from '@/utils/candleResampler';
 
 export interface IntegrationState {
@@ -110,17 +111,18 @@ export function useMasterBlueprint(ticker: string) {
     // ========================================================================
 
     const analyzeTrading = useCallback(() => {
-        // Psychological analytics will be computed from store trades
+        // 🔥 FIX: Trades are in useTradingStore, not useSimulationStore
+        // Psychological analytics will be computed from trading store trades
         // - Revenge trading detection
         // - Timeframe suitability
         // - Cut profit early pattern
 
-        const trades = store.trades;
+        const trades = useTradingStore.getState().trades;
         console.log('[Integration] 📊 Analyzing', trades.length, 'trades for psychological patterns');
 
         // Analytics are computed on-demand by PsychologicalAnalytics component
         return trades;
-    }, [store.trades]);
+    }, []); // No dependency on store.trades since we're using direct getState()
 
     // ========================================================================
     // Auto-initialize worker optimization
