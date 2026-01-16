@@ -22,6 +22,7 @@
     "next": "16.1.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "simplex-noise": "^4.0.3",
     "technicalindicators": "^3.1.0",
     "yahoo-finance2": "^3.11.2",
     "zustand": "^5.0.10"

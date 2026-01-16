@@ -285,6 +285,52 @@ function analyzeCandle(candle: Candle): PatternProfile {
 // ============================================================================
 
 /**
+ * Simplex Noise Generator for Professional-Grade Organic Movement
+ * Uses simplex-noise library for high-quality procedural noise
+ */
+
+import { createNoise2D } from 'simplex-noise';
+
+// Create persistent noise generator
+const noise2D = createNoise2D();
+
+/**
+ * Generate multi-octave simplex noise for realistic market microstructure
+ *  
+ * @param seed - Unique seed per tick (prevents pattern repetition)
+ * @param frequency - Base frequency (higher = more rapid fluctuations)
+ * @param octaves - Number of noise layers (higher = more detail)
+ * @returns Value between -1 and 1
+ * 
+ * Market Psychology:
+ * - Low octaves (1-2): Smooth, institutional flow
+ * - High octaves (3-4): Choppy, retail-driven activity
+ */
+function generateOrganicNoise(
+    seed: number,
+    frequency: number = 1.0,
+    octaves: number = 2
+): number {
+    let value = 0;
+    let amplitude = 1.0;
+    let totalAmplitude = 0;
+
+    // Multi-octave fractal noise
+    for (let i = 0; i < octaves; i++) {
+        const octaveFreq = frequency * Math.pow(2, i);
+        const x = seed * 0.001 * octaveFreq; // Scale seed to reasonable range
+        const y = seed * 0.0007 * octaveFreq; // Different scale for 2D variation
+
+        value += noise2D(x, y) * amplitude;
+        totalAmplitude += amplitude;
+        amplitude *= 0.5; // Each octave half volume of previous
+    }
+
+    // Normalize to -1 to 1 range
+    return value / totalAmplitude;
+}
+
+/**
  * Generate price from waypoint name
  */
 function getWaypointPrice(waypoint: PathWaypoint, candle: Candle): number {
@@ -294,16 +340,6 @@ function getWaypointPrice(waypoint: PathWaypoint, candle: Candle): number {
         case 'LOW': return candle.l;
         case 'CLOSE': return candle.c;
     }
-}
-
-/**
- * Simple fractal noise generator (Perlin-like)
- * Returns value between -1 and 1
- */
-function fractalNoise(seed: number, frequency: number = 1.0): number {
-    // Simple pseudo-random noise based on sine waves
-    const x = seed * frequency;
-    return (Math.sin(x * 12.9898) * Math.sin(x * 78.233)) * 0.5;
 }
 
 /**
@@ -387,10 +423,15 @@ function generateOrganicPath(
         const segmentProgress = (i - beforeAnchor.tick) / (afterAnchor.tick - beforeAnchor.tick);
         let basePrice = beforeAnchor.price + (afterAnchor.price - beforeAnchor.price) * segmentProgress;
 
-        // 🔥 MICRO-NOISE: Fractal noise injection
+        // 🔥 MICRO-NOISE: Simplex noise injection (Professional-grade)
         // Simulates bid/ask spread battles, order flow fluctuations
         const noiseSeed = i + candle.t; // Unique seed per tick
-        const noise = fractalNoise(noiseSeed, 0.5) * range * context.noiseLevel;
+
+        // Context-aware noise parameters
+        const noiseFreq = context.volatility === 'high' ? 1.5 : context.volatility === 'low' ? 0.7 : 1.0;
+        const noiseOctaves = context.isFlowAligned ? 2 : 3; // Aligned = smooth (2 octaves), Conflicted = choppy (3 octaves)
+
+        const noise = generateOrganicNoise(noiseSeed, noiseFreq, noiseOctaves) * range * context.noiseLevel;
         let price = basePrice + noise;
 
         // 🔥 MAGNETIC PULL: Converge to CLOSE in last 20% of ticks
@@ -897,7 +938,7 @@ class SimulationEngine {
             patternBullish: pattern.isBullish,
             sessionProgress: 0.5,
             volumeVsAverage: candle.v / this.averageVolume,
-            trend: 'neutral' as const,
+            trend: 'sideways' as const,
             trendStrength: 50,
             volatility: candle.v > this.averageVolume * 1.5 ? 'high' as const :
                 candle.v < this.averageVolume * 0.7 ? 'low' as const : 'medium' as const,
@@ -909,7 +950,7 @@ class SimulationEngine {
             patternBullish: pattern.isBullish,
             sessionProgress: 0.5,
             volumeVsAverage: 1,
-            trend: 'neutral' as const,
+            trend: 'sideways' as const,
             trendStrength: 50,
             volatility: 'medium' as const,
             isFlowAligned: true,

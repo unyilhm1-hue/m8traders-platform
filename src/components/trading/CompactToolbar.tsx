@@ -13,6 +13,8 @@ import { UI_ICONS } from '@/lib/chart/icons';
 import { Portal } from '@/components/ui/Portal';
 import { useRef, useState, useEffect } from 'react';
 import { useChartStore } from '@/stores';
+import { IntervalButtons } from './IntervalButtons';  // 🔥 MASTER BLUEPRINT
+
 
 export function CompactToolbar() {
     // Chart state (for ticker, timeframe, indicators only)
@@ -94,13 +96,8 @@ export function CompactToolbar() {
 
                 <div className="w-px h-5 bg-[var(--bg-tertiary)] mx-2" />
 
-                {/* Timeframe Selector */}
-                <Select
-                    value={timeframe}
-                    onChange={(val) => setTimeframe(val as any)}
-                    options={timeframeOptions}
-                    className="w-[90px]"
-                />
+                {/* 🔥 MASTER BLUEPRINT: Dynamic Interval Buttons */}
+                <IntervalButtons />
 
                 {/* Indicators Dropdown (Portal implementation) */}
                 <div className="relative">

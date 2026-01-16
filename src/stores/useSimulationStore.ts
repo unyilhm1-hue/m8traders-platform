@@ -7,6 +7,8 @@ import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import type { TickData } from '@/hooks/useSimulationWorker';
 import type { Candle } from '@/types';
+import { resampleCandles, getAvailableIntervals, type Interval, type IntervalState } from '@/utils/candleResampler';
+import { getCached, loadWithBuffer, invalidateCache, type CachedData } from '@/utils/smartBuffer';
 
 // ============================================================================
 // Types
@@ -54,6 +56,13 @@ interface SimulationState {
     selectedDate: string | null; // YYYY-MM-DD format
     simulationCandles: Candle[]; // Candles for selected date (simulation queue)
 
+    // 🆕 Master Blueprint: Data Layer & Resampling
+    baseInterval: Interval;             // Current base interval (e.g., '1m', '5m')
+    baseData: Candle[];                 // Original data at base interval (King)
+    bufferData: Candle[];               // Historical buffer for indicators
+    cachedIntervals: Map<Interval, Candle[]>;  // Resampled intervals cache
+    currentTicker: string;              // Current ticker symbol
+
     // Orderbook simulation (Level 2)
     orderbookBids: OrderbookLevel[];
     orderbookAsks: OrderbookLevel[];
@@ -86,6 +95,12 @@ interface SimulationState {
     setOrderbookDepth: (depth: number) => void;
     setMarketConfig: (config: Partial<SimulationState['marketConfig']>) => void; // ✅ FIX 2: New action
     setLastProcessedIndex: (index: number) => void; // ✅ Phoenix Pattern: Update progress
+
+    // 🆕 Master Blueprint: New Actions
+    loadWithSmartBuffer: (ticker: string, startDate: Date, interval: Interval) => Promise<void>;
+    switchInterval: (targetInterval: Interval) => Candle[];
+    getIntervalStates: () => IntervalState[];
+    clearIntervalCache: () => void;
 }
 
 // ============================================================================
@@ -107,6 +122,13 @@ const initialState = {
 
     selectedDate: null,
     simulationCandles: [],
+
+    // 🆕 Master Blueprint: Data Layer defaults
+    baseInterval: '1m' as Interval,
+    baseData: [],
+    bufferData: [],
+    cachedIntervals: new Map<Interval, Candle[]>(),
+    currentTicker: '',
 
     orderbookBids: [],
     orderbookAsks: [],
@@ -603,6 +625,80 @@ export const useSimulationStore = create<SimulationState>()(
         setLastProcessedIndex(index) {
             set((state) => {
                 state.lastProcessedIndex = index;
+            });
+        },
+
+        // 🆕 Master Blueprint: Load data with smart buffering
+        async loadWithSmartBuffer(ticker, startDate, interval) {
+            try {
+                console.log(`[Store] 📥 Loading ${ticker} ${interval} with smart buffer...`);
+
+                const cached = await loadWithBuffer({
+                    ticker,
+                    startDate,
+                    baseInterval: interval,
+                    bufferSize: 200
+                });
+
+                set((state) => {
+                    state.currentTicker = ticker;
+                    state.baseInterval = interval;
+                    state.baseData = [...cached.buffer, ...cached.active];
+                    state.bufferData = cached.buffer;
+                    state.cachedIntervals.clear(); // Reset cache when loading new data
+                    state.cachedIntervals.set(interval, state.baseData); // Cache base interval
+                });
+
+                console.log(`[Store] ✅ Loaded ${cached.buffer.length} buffer + ${cached.active.length} active candles`);
+            } catch (error) {
+                console.error('[Store] ❌ Failed to load with smart buffer:', error);
+                throw error;
+            }
+        },
+
+        // 🆕 Master Blueprint: Switch interval with client-side resampling
+        switchInterval(targetInterval) {
+            const state = useSimulationStore.getState();
+
+            // Check if already cached
+            const cached = state.cachedIntervals.get(targetInterval);
+            if (cached) {
+                console.log(`[Store] ✅ Using cached ${targetInterval} data (${cached.length} candles)`);
+                return cached;
+            }
+
+            // Resample from base data
+            try {
+                const resampled = resampleCandles(
+                    state.baseData,
+                    state.baseInterval,
+                    targetInterval
+                );
+
+                // Cache result
+                set((state) => {
+                    state.cachedIntervals.set(targetInterval, resampled);
+                });
+
+                console.log(`[Store] ✅ Resampled ${state.baseInterval} → ${targetInterval} (${resampled.length} candles)`);
+                return resampled;
+            } catch (error) {
+                console.error(`[Store] ❌ Failed to resample to ${targetInterval}:`, error);
+                throw error;
+            }
+        },
+
+        // 🆕 Master Blueprint: Get interval button states
+        getIntervalStates() {
+            const state = useSimulationStore.getState();
+            return getAvailableIntervals(state.baseInterval, state.baseData);
+        },
+
+        // 🆕 Master Blueprint: Clear interval cache
+        clearIntervalCache() {
+            set((state) => {
+                state.cachedIntervals.clear();
+                console.log('[Store] 🗑️ Interval cache cleared');
             });
         },
     }))
