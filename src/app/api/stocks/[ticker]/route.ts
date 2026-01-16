@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import YahooFinance from 'yahoo-finance2'; // v3: default export is the class
 import type { Candle } from '@/types';
+import {
+    getIntervalConfig,
+    calculatePeriodStart,
+    mapToYahooInterval,
+    type YahooInterval
+} from '@/config/dataProviders';
 
 // v3 requires instantiation (per UPGRADING.md)
 const yahooFinance = new YahooFinance();
-
-/**
- * Yahoo Finance supported intervals
- */
-type YahooInterval = '1m' | '2m' | '5m' | '15m' | '30m' | '60m' | '90m' | '1h' | '1d' | '5d' | '1wk' | '1mo' | '3mo';
 
 interface RouteParams {
     params: Promise<{
@@ -48,35 +49,19 @@ export async function GET(request: NextRequest, context: RouteParams) {
         if (period1Param && period2Param) {
             period1 = new Date(period1Param);
             period2 = new Date(period2Param);
-            yahooInterval = mapTimeframeToInterval(interval);
+            yahooInterval = mapToYahooInterval(interval);
 
             console.log(`[API] Batch download: ${yahooTicker} ${interval} from ${period1.toISOString()} to ${period2.toISOString()}`);
         } else {
-            // Default: Use requested interval
-            yahooInterval = mapTimeframeToInterval(interval);
+            // ✅ CONFIG-DRIVEN: Get interval config from centralized config
+            const intervalConfig = getIntervalConfig(interval);
+            yahooInterval = intervalConfig.yahooInterval;
 
-            const now = new Date();
+            // Calculate period1 using config's safeDays (not hardcoded magic numbers)
+            period1 = calculatePeriodStart(interval, true); // true = use safeDays
+            period2 = new Date();
 
-            // Adjust period based on timeframe
-            // Intraday data: Yahoo limits to 7 days for 1m-30m, 60 days for 1h
-            // Daily+ data: Use 1 year
-            if (['1m', '5m', '15m', '30m'].includes(interval)) {
-                // 7 days for minute-level data
-                period1 = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-                console.log(`[API] Default fetch: ${yahooTicker} ${yahooInterval} (7 days)`);
-            } else if (interval === '1h') {
-                // 60 days for hourly
-                period1 = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
-                console.log(`[API] Default fetch: ${yahooTicker} ${yahooInterval} (60 days)`);
-            } else {
-                // 1 year for daily+
-                const oneYearAgo = new Date(now);
-                oneYearAgo.setFullYear(now.getFullYear() - 1);
-                period1 = oneYearAgo;
-                console.log(`[API] Default fetch: ${yahooTicker} ${yahooInterval} (1 year)`);
-            }
-
-            period2 = now;
+            console.log(`[API] Config-driven fetch: ${yahooTicker} ${yahooInterval} (${intervalConfig.safeDays} days - ${intervalConfig.description})`);
         }
 
         // Fetch from Yahoo Finance
@@ -103,14 +88,23 @@ export async function GET(request: NextRequest, context: RouteParams) {
                 quote.low !== null &&
                 quote.close !== null
             )
-            .map((quote: any) => ({
-                t: new Date(quote.date!).getTime(),
-                o: quote.open!,
-                h: quote.high!,
-                l: quote.low!,
-                c: quote.close!,
-                v: quote.volume || 0,
-            }))
+            .map((quote: any) => {
+                // ✅ DATA SANITIZATION: Swap high/low if invalid
+                let high = quote.high!;
+                let low = quote.low!;
+                if (high < low) {
+                    [high, low] = [low, high];
+                }
+
+                return {
+                    t: new Date(quote.date!).getTime(),
+                    o: quote.open!,
+                    h: high,
+                    l: low,
+                    c: quote.close!,
+                    v: quote.volume || 0,
+                };
+            })
             .slice(-limit); // Return last 'limit' candles
 
         console.log(`[API] Successfully fetched ${candles.length} candles for ${yahooTicker} (from ${result.quotes.length} total)`);
@@ -144,50 +138,9 @@ export async function GET(request: NextRequest, context: RouteParams) {
     }
 }
 
-/**
- * Map our timeframe to Yahoo Finance interval
- */
-function mapTimeframeToInterval(timeframe: string): YahooInterval {
-    const map: Record<string, YahooInterval> = {
-        '1m': '1m',
-        '5m': '5m',
-        '15m': '15m',
-        '30m': '30m',
-        '1h': '1h',
-        '4h': '1h', // Yahoo doesn't have 4h, use 1h
-        '1d': '1d',
-        '1w': '1wk',
-    } as const satisfies Record<string, YahooInterval>;
-    return map[timeframe] || '5m';
-}
+// ============================================================================
+// NOTE: Helper functions mapTimeframeToInterval, getPeriodStart, getTimeframeMinutes
+// have been moved to src/config/dataProviders.ts for centralized configuration.
+// Use: mapToYahooInterval(), calculatePeriodStart(), getIntervalMs() from config.
+// ============================================================================
 
-/**
- * Calculate start date based on timeframe and limit
- */
-function getPeriodStart(timeframe: string, limit: number): Date {
-    const now = new Date();
-    const minutes = getTimeframeMinutes(timeframe) * limit;
-
-    // Add buffer for weekends and market closed hours
-    const bufferMultiplier = timeframe === '1m' || timeframe === '5m' ? 2.5 : 1.5;
-    const adjustedMinutes = minutes * bufferMultiplier;
-
-    return new Date(now.getTime() - adjustedMinutes * 60 * 1000);
-}
-
-/**
- * Get timeframe duration in minutes
- */
-function getTimeframeMinutes(timeframe: string): number {
-    const minutes: Record<string, number> = {
-        '1m': 1,
-        '5m': 5,
-        '15m': 15,
-        '30m': 30,
-        '1h': 60,
-        '4h': 240,
-        '1d': 1440,
-        '1w': 10080,
-    };
-    return minutes[timeframe] || 5;
-}

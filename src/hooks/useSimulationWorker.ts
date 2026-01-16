@@ -2,10 +2,13 @@
  * useSimulationWorker Hook
  * Manages Web Worker lifecycle for simulation engine
  * Updated to fetch data from local API (/api/simulation/start)
+ * 
+ * ✅ Phoenix Pattern: Auto-respawn on crash with resume from last position
  */
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import type { Candle } from '@/types';
+import { useSimulationStore } from '@/stores/useSimulationStore';
 
 export interface TickData {
     price: number;
@@ -16,11 +19,13 @@ export interface TickData {
 }
 
 interface WorkerMessage {
-    type: 'TICK' | 'CANDLE_CHANGE' | 'COMPLETE' | 'READY' | 'DATA_READY' | 'ERROR';
+    type: 'TICK' | 'CANDLE_CHANGE' | 'COMPLETE' | 'READY' | 'DATA_READY' | 'ERROR' | 'PLAYBACK_STATE';
     data?: TickData;
     candleIndex?: number;
     totalCandles?: number;
     message?: string;
+    isPlaying?: boolean;
+    speed?: number;
 }
 
 interface UseSimulationWorkerOptions {
@@ -29,6 +34,7 @@ interface UseSimulationWorkerOptions {
     onComplete?: () => void;
     onDataReady?: (totalCandles: number) => void;
     onError?: (message: string) => void;
+    onRespawn?: (attemptCount: number) => void; // ✅ Phoenix Pattern: Callback for respawn
 }
 
 interface SimulationData {
@@ -38,6 +44,10 @@ interface SimulationData {
     candleCount: number;
     source: string;
 }
+
+// ✅ Phoenix Pattern: Max respawn attempts before giving up
+const MAX_RESPAWN_ATTEMPTS = 3;
+const RESPAWN_DELAY_MS = 500;
 
 export function useSimulationWorker(options: UseSimulationWorkerOptions = {}) {
     const workerRef = useRef<Worker | null>(null);
@@ -49,14 +59,17 @@ export function useSimulationWorker(options: UseSimulationWorkerOptions = {}) {
         candleCount: number;
     } | null>(null);
 
-    // Initialize worker
-    useEffect(() => {
-        if (typeof window === 'undefined' || isInitialized.current) {
-            return; // Skip SSR and prevent double init
-        }
+    // ✅ Phoenix Pattern: Track respawn attempts and cached data
+    const respawnCountRef = useRef(0);
+    const cachedCandlesRef = useRef<Candle[] | null>(null);
+    const wasPlayingRef = useRef(false);
+    const lastSpeedRef = useRef(1);
 
+    // ✅ Phoenix Pattern: Create worker with message handlers
+    const createWorker = useCallback(() => {
         try {
-            // Load worker from public directory
+            console.log('[useSimulationWorker] 🐣 Creating worker...');
+
             const worker = new Worker(
                 new URL('/workers/simulation.worker.ts', window.location.origin),
                 { type: 'module' }
@@ -64,7 +77,7 @@ export function useSimulationWorker(options: UseSimulationWorkerOptions = {}) {
 
             // Setup message handler
             worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
-                const { type, data, candleIndex, totalCandles, message } = event.data;
+                const { type, data, candleIndex, totalCandles, message, isPlaying, speed } = event.data;
 
                 switch (type) {
                     case 'READY':
@@ -86,8 +99,13 @@ export function useSimulationWorker(options: UseSimulationWorkerOptions = {}) {
                         break;
 
                     case 'CANDLE_CHANGE':
-                        if (candleIndex !== undefined && options.onCandleChange) {
-                            options.onCandleChange(candleIndex);
+                        if (candleIndex !== undefined) {
+                            // ✅ Phoenix Pattern: Track progress in store
+                            useSimulationStore.getState().setLastProcessedIndex(candleIndex);
+
+                            if (options.onCandleChange) {
+                                options.onCandleChange(candleIndex);
+                            }
                         }
                         break;
 
@@ -95,6 +113,12 @@ export function useSimulationWorker(options: UseSimulationWorkerOptions = {}) {
                         if (options.onComplete) {
                             options.onComplete();
                         }
+                        break;
+
+                    case 'PLAYBACK_STATE':
+                        // Track playback state for respawn
+                        if (isPlaying !== undefined) wasPlayingRef.current = isPlaying;
+                        if (speed !== undefined) lastSpeedRef.current = speed;
                         break;
 
                     case 'ERROR':
@@ -109,19 +133,85 @@ export function useSimulationWorker(options: UseSimulationWorkerOptions = {}) {
                 }
             };
 
+            // ✅ Phoenix Pattern: Enhanced error handler with respawn
             worker.onerror = (error) => {
-                console.error('[useSimulationWorker] Worker error:', error);
-                if (options.onError) {
-                    options.onError('Worker encountered an error');
+                console.error('[useSimulationWorker] 💀 Worker crashed:', error);
+
+                // Attempt respawn if under max attempts
+                if (respawnCountRef.current < MAX_RESPAWN_ATTEMPTS) {
+                    respawnCountRef.current++;
+                    console.log(`[useSimulationWorker] 🔄 Respawning worker (attempt ${respawnCountRef.current}/${MAX_RESPAWN_ATTEMPTS})...`);
+
+                    // Notify about respawn
+                    if (options.onRespawn) {
+                        options.onRespawn(respawnCountRef.current);
+                    }
+
+                    // Terminate crashed worker
+                    worker.terminate();
+                    workerRef.current = null;
+
+                    // Respawn after short delay
+                    setTimeout(() => {
+                        const newWorker = createWorker();
+                        if (newWorker) {
+                            workerRef.current = newWorker;
+
+                            // Re-init with cached data
+                            if (cachedCandlesRef.current) {
+                                console.log('[useSimulationWorker] 📦 Re-initializing with cached data...');
+                                newWorker.postMessage({
+                                    type: 'INIT_DATA',
+                                    candles: cachedCandlesRef.current,
+                                });
+
+                                // Wait for data ready, then seek and resume
+                                const handleReady = (event: MessageEvent<WorkerMessage>) => {
+                                    if (event.data.type === 'DATA_READY') {
+                                        const lastIndex = useSimulationStore.getState().lastProcessedIndex;
+                                        console.log(`[useSimulationWorker] 🎯 Seeking to last position: ${lastIndex}`);
+
+                                        newWorker.postMessage({ type: 'SEEK', index: lastIndex });
+
+                                        // Resume if was playing
+                                        if (wasPlayingRef.current) {
+                                            console.log(`[useSimulationWorker] ▶️ Resuming playback at ${lastSpeedRef.current}x`);
+                                            newWorker.postMessage({ type: 'PLAY', speed: lastSpeedRef.current });
+                                        }
+
+                                        newWorker.removeEventListener('message', handleReady);
+                                    }
+                                };
+                                newWorker.addEventListener('message', handleReady);
+                            }
+                        }
+                    }, RESPAWN_DELAY_MS);
+                } else {
+                    console.error('[useSimulationWorker] ❌ Max respawn attempts reached. Giving up.');
+                    if (options.onError) {
+                        options.onError('Worker crashed and could not be recovered');
+                    }
                 }
             };
 
+            return worker;
+        } catch (error) {
+            console.error('[useSimulationWorker] Failed to create worker:', error);
+            return null;
+        }
+    }, [options]);
+
+    // Initialize worker
+    useEffect(() => {
+        if (typeof window === 'undefined' || isInitialized.current) {
+            return; // Skip SSR and prevent double init
+        }
+
+        const worker = createWorker();
+        if (worker) {
             workerRef.current = worker;
             isInitialized.current = true;
-
-            console.log('[useSimulationWorker] Worker initialized');
-        } catch (error) {
-            console.error('[useSimulationWorker] Failed to initialize worker:', error);
+            console.log('[useSimulationWorker] ✅ Worker initialized');
         }
 
         // Cleanup on unmount
@@ -131,12 +221,14 @@ export function useSimulationWorker(options: UseSimulationWorkerOptions = {}) {
                 workerRef.current = null;
                 isInitialized.current = false;
                 setIsDataLoaded(false);
+                respawnCountRef.current = 0;
+                cachedCandlesRef.current = null;
                 console.log('[useSimulationWorker] Worker terminated');
             }
         };
-    }, []); // Empty deps - run once on mount
+    }, [createWorker]);
 
-    // NEW: Load simulation data from local API
+    // Load simulation data from local API
     const loadSimulationData = useCallback(async () => {
         try {
             console.log('[useSimulationWorker] Fetching simulation data from API...');
@@ -154,6 +246,10 @@ export function useSimulationWorker(options: UseSimulationWorkerOptions = {}) {
 
             // Store simulation info
             setSimulationInfo({ ticker, date, candleCount });
+
+            // ✅ Phoenix Pattern: Cache candles for potential respawn
+            cachedCandlesRef.current = candles;
+            respawnCountRef.current = 0; // Reset respawn count on fresh data load
 
             // Send data to worker
             if (workerRef.current) {
@@ -185,6 +281,10 @@ export function useSimulationWorker(options: UseSimulationWorkerOptions = {}) {
             return;
         }
 
+        // ✅ Phoenix Pattern: Track playback state
+        wasPlayingRef.current = true;
+        lastSpeedRef.current = speed;
+
         workerRef.current.postMessage({
             type: 'PLAY',
             speed,
@@ -198,6 +298,9 @@ export function useSimulationWorker(options: UseSimulationWorkerOptions = {}) {
             return;
         }
 
+        // ✅ Phoenix Pattern: Track playback state
+        wasPlayingRef.current = false;
+
         workerRef.current.postMessage({ type: 'PAUSE' });
     }, []);
 
@@ -208,6 +311,9 @@ export function useSimulationWorker(options: UseSimulationWorkerOptions = {}) {
             return;
         }
 
+        // ✅ Phoenix Pattern: Track playback state
+        wasPlayingRef.current = false;
+
         workerRef.current.postMessage({ type: 'STOP' });
     }, []);
 
@@ -217,6 +323,9 @@ export function useSimulationWorker(options: UseSimulationWorkerOptions = {}) {
             console.error('[useSimulationWorker] Worker not initialized');
             return;
         }
+
+        // ✅ Phoenix Pattern: Track speed
+        lastSpeedRef.current = speed;
 
         workerRef.current.postMessage({
             type: 'SET_SPEED',
@@ -247,5 +356,6 @@ export function useSimulationWorker(options: UseSimulationWorkerOptions = {}) {
         isReady: isInitialized.current,
         isDataLoaded,
         simulationInfo,
+        respawnCount: respawnCountRef.current, // ✅ Phoenix Pattern: Expose respawn count
     };
 }

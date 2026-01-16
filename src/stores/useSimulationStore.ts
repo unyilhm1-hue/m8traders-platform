@@ -66,6 +66,17 @@ interface SimulationState {
     // Volume metrics
     cumulativeVolume: number;
 
+    // ✅ Phoenix Pattern: Track last processed candle for crash recovery
+    lastProcessedIndex: number;
+
+    // ✅ FIX 2: Market hours configuration (configurable timezone filter)
+    marketConfig: {
+        timezone: string;        // e.g., 'Asia/Jakarta', 'America/New_York'
+        openHour: number;        // 9
+        closeHour: number;       // 16
+        filterEnabled: boolean;  // true = filter to market hours, false = accept all
+    };
+
     // Actions
     pushTick: (tick: TickData) => void;
     setCandleHistory: (candles: Candle[]) => void; // Set initial history from worker
@@ -73,6 +84,8 @@ interface SimulationState {
     loadSimulationDay: (date: string, allCandles: Candle[]) => { historyCount: number; simCount: number; error: string | null }; // NEW: Smart data split
     reset: () => void;
     setOrderbookDepth: (depth: number) => void;
+    setMarketConfig: (config: Partial<SimulationState['marketConfig']>) => void; // ✅ FIX 2: New action
+    setLastProcessedIndex: (index: number) => void; // ✅ Phoenix Pattern: Update progress
 }
 
 // ============================================================================
@@ -103,6 +116,17 @@ const initialState = {
     maxTradeHistory: 50,
 
     cumulativeVolume: 0,
+
+    // ✅ Phoenix Pattern: Start at index 0
+    lastProcessedIndex: 0,
+
+    // ✅ FIX 2: Default market config (WIB, 09-16, filter enabled)
+    marketConfig: {
+        timezone: 'Asia/Jakarta',
+        openHour: 9,
+        closeHour: 16,
+        filterEnabled: true  // Default: filter enabled for IDX market
+    },
 };
 
 // ============================================================================
@@ -290,25 +314,18 @@ export const useSimulationStore = create<SimulationState>()(
         },
 
         loadSimulationDay: (dateStr, allCandles) => {
-            console.log(`[Store] 🌏 Enforcing WIB Logic for Date: ${dateStr}`);
+            // ✅ FIX 2: Use configurable market config instead of hardcoded WIB
+            const { marketConfig } = useSimulationStore.getState();
 
-            // --- 1. SETTING BATAS WAKTU WIB (The WIB Enforcer) ---
-            // Kita parsing tanggal string (YYYY-MM-DD)
-            const [year, month, day] = dateStr.split('-').map(Number);
+            console.log(`[Store] 🌏 Loading with timezone: ${marketConfig.timezone}, filter: ${marketConfig.filterEnabled ? `${marketConfig.openHour}-${marketConfig.closeHour}` : 'disabled'}`);
 
-            // Buat objek Date seolah-olah di UTC, lalu kurangi offset agar pas di 00:00 WIB
-            // WIB = UTC+7. Jadi 00:00 WIB = 17:00 UTC hari sebelumnya.
-            // Cara paling aman: Pakai string comparison dengan Locale Jakarta.
-
-            const marketOpenHour = 9;  // 09:00 WIB
-            const marketCloseHour = 16; // 16:00 WIB
-
+            // --- 1. SETTING BATAS WAKTU BASED ON CONFIGURED TIMEZONE ---
             const historyContext: ChartCandle[] = [];
             const simulationQueue: Candle[] = [];
 
-            allCandles.forEach((c) => {
+            allCandles.forEach((c: any) => {
                 // A. Normalisasi Timestamp (Pastikan Detik vs Milidetik aman)
-                const rawT = c.t || (c as any).time; // Handle 't' atau 'time'
+                const rawT = c.t || c.time; // Handle 't' atau 'time'
                 let tsMs: number; // Timestamp dalam Milliseconds
 
                 if (typeof rawT === 'number') {
@@ -318,48 +335,60 @@ export const useSimulationStore = create<SimulationState>()(
                     tsMs = new Date(rawT).getTime();
                 }
 
-                // B. CEK TANGGAL DENGAN ZONA WAKTU JAKARTA (WIB)
-                // Ini inti dari ide Anda: Menggunakan 'Asia/Jakarta' secara eksplisit
+                // B. CEK TANGGAL DENGAN ZONA WAKTU YANG DIKONFIGURASI
                 const candleDateObj = new Date(tsMs);
 
-                // Konversi timestamp candle ke string tanggal WIB ("2026-01-15")
-                const candleDateWIB = candleDateObj.toLocaleDateString('en-CA', {
-                    timeZone: 'Asia/Jakarta'
-                }); // en-CA formatnya YYYY-MM-DD, sangat presisi untuk sorting
+                // Convert timestamp candle to date string in configured timezone
+                const candleDateLocal = candleDateObj.toLocaleDateString('en-CA', {
+                    timeZone: marketConfig.timezone
+                }); // en-CA format: YYYY-MM-DD
 
                 // C. LOGIKA FILTER (THE GREAT SPLIT)
-                if (candleDateWIB < dateStr) {
-                    // Jika tanggal candle < Tanggal Terpilih -> Masuk HISTORY
+                if (candleDateLocal < dateStr) {
+                    // If candle date < Selected Date -> Add to HISTORY
                     historyContext.push({
-                        time: Math.floor(tsMs / 1000), // Chart butuh Detik
-                        open: c.o || (c as any).open,
-                        high: c.h || (c as any).high,
-                        low: c.l || (c as any).low,
-                        close: c.c || (c as any).close,
+                        time: Math.floor(tsMs / 1000), // Chart needs seconds
+                        open: c.o || c.open,
+                        high: c.h || c.high,
+                        low: c.l || c.low,
+                        close: c.c || c.close,
                     });
-                } else if (candleDateWIB === dateStr) {
-                    // Jika tanggal candle == Tanggal Terpilih -> Cek Jam Market
-                    // Ambil jam candle dalam WIB (0-23)
-                    const candleHourWIB = Number(candleDateObj.toLocaleString('en-US', {
-                        hour: 'numeric',
-                        hour12: false,
-                        timeZone: 'Asia/Jakarta'
-                    }));
+                } else if (candleDateLocal === dateStr) {
+                    // If candle date == Selected Date -> Check Market Hours (if filter enabled)
 
-                    // 🐛 DEBUG: Log filtering details
-                    if (simulationQueue.length < 10) {
-                        console.log(`[Store] Candle ${simulationQueue.length}: ${candleDateObj.toISOString()} -> WIB Hour: ${candleHourWIB}, Match: ${candleHourWIB >= marketOpenHour && candleHourWIB <= marketCloseHour}`);
-                    }
+                    // ✅ FIX 2: Apply filter ONLY if enabled
+                    if (marketConfig.filterEnabled) {
+                        // Get candle hour in configured timezone (0-23)
+                        const candleHourLocal = Number(candleDateObj.toLocaleString('en-US', {
+                            hour: 'numeric',
+                            hour12: false,
+                            timeZone: marketConfig.timezone
+                        }));
 
-                    // Masukkan ke SIMULASI (Queue)
-                    // Opsional: Filter jam 09:00 - 16:00 biar rapi
-                    if (candleHourWIB >= marketOpenHour && candleHourWIB <= marketCloseHour) {
+                        // 🐛 DEBUG: Log filtering details (first 10 only)
+                        if (simulationQueue.length < 10) {
+                            console.log(`[Store] Candle ${simulationQueue.length}: ${candleDateObj.toISOString()} -> ${marketConfig.timezone} Hour: ${candleHourLocal}, Match: ${candleHourLocal >= marketConfig.openHour && candleHourLocal <= marketConfig.closeHour}`);
+                        }
+
+                        // Filter by market hours
+                        if (candleHourLocal >= marketConfig.openHour && candleHourLocal <= marketConfig.closeHour) {
+                            simulationQueue.push({
+                                ...c,
+                                t: tsMs // Store in MS for Worker
+                            });
+                        } else if (simulationQueue.length < 10) {
+                            console.log(`[Store] ❌ Rejected (hour ${candleHourLocal} outside ${marketConfig.openHour}-${marketConfig.closeHour})`);
+                        }
+                    } else {
+                        // No filtering - accept all candles on the selected date
                         simulationQueue.push({
                             ...c,
-                            t: tsMs // Simpan dalam MS untuk Worker
+                            t: tsMs
                         });
-                    } else if (simulationQueue.length < 10) {
-                        console.log(`[Store] ❌ Rejected (hour ${candleHourWIB} outside 9-16)`);
+
+                        if (simulationQueue.length < 10) {
+                            console.log(`[Store] ✅ Accepted (filter disabled)`);
+                        }
                     }
                 }
             });
@@ -431,6 +460,25 @@ export const useSimulationStore = create<SimulationState>()(
                 state.orderbookDepth = depth;
             });
         },
+
+        // ✅ FIX 2: Set market configuration
+        setMarketConfig(config) {
+            set((state) => {
+                state.marketConfig = {
+                    ...state.marketConfig,
+                    ...config
+                };
+
+                console.log(`[Store] 📊 Market config updated:`, state.marketConfig);
+            });
+        },
+
+        // ✅ Phoenix Pattern: Update last processed index (for crash recovery)
+        setLastProcessedIndex(index) {
+            set((state) => {
+                state.lastProcessedIndex = index;
+            });
+        },
     }))
 );
 
@@ -458,3 +506,6 @@ export const useOrderbook = () => {
     return { bids, asks };
 };
 export const useRecentTrades = () => useSimulationStore((state) => state.recentTrades);
+
+// ✅ Phoenix Pattern: Selector for last processed index
+export const useLastProcessedIndex = () => useSimulationStore((state) => state.lastProcessedIndex);

@@ -103,8 +103,50 @@ export async function GET(request: Request) {
         };
         const baseIntervalMs = 60000; // 1 minute in ms
         const multiplier = intervalMultipliers[requestedInterval] || 1;
+        const expectedIntervalMs = baseIntervalMs * multiplier;
 
-        console.log(`[API/Start] Applying ${multiplier}x timestamp multiplier for ${requestedInterval}`);
+        console.log(`[API/Start] Requested interval: ${requestedInterval} (${expectedIntervalMs}ms)`);
+
+        // ✅ FIX 1: Detect if data already has correct interval spacing
+        // This prevents double-adjustment when time-only data is already properly spaced
+        const detectInterval = (candles: any[], expectedMs: number, dateStr: string): boolean => {
+            if (candles.length < 3) return false;
+
+            const timestamps: number[] = [];
+
+            // Sample first 5 candles (more reliable than 3)
+            for (let i = 0; i < Math.min(5, candles.length); i++) {
+                const timeStr = candles[i].time;
+
+                // Only check time-only format (HH:MM or HH:MM:SS)
+                if (!timeStr.match(/^\d{2}:\d{2}(:\d{2})?$/)) continue;
+
+                const timePart = timeStr.length === 5 ? `${timeStr}:00` : timeStr;
+                const ts = new Date(`${dateStr}T${timePart}Z`).getTime();
+
+                if (!isNaN(ts)) timestamps.push(ts);
+            }
+
+            if (timestamps.length < 2) return false;
+
+            // Check intervals between consecutive candles
+            const intervals = [];
+            for (let i = 1; i < timestamps.length; i++) {
+                intervals.push(timestamps[i] - timestamps[i - 1]);
+            }
+
+            // All intervals should match expected interval (within 1s tolerance)
+            const allMatch = intervals.every(interval =>
+                Math.abs(interval - expectedMs) < 1000
+            );
+
+            console.log(`[API/Start] Interval detection: ${allMatch ? '✅ Already spaced' : '❌ Needs multiplier'} (intervals: ${intervals.join(', ')}ms, expected: ${expectedMs}ms)`);
+
+            return allMatch;
+        };
+
+        // Detect interval once before processing
+        const isAlreadySpaced = detectInterval(rawData, expectedIntervalMs, dateFromFilename || '');
 
         const candlesWithTimestamp = rawData.map((candle: any, index: number) => {
             let timestamp: number;
@@ -122,10 +164,15 @@ export async function GET(request: Request) {
                     const fullDatetime = `${dateFromFilename}T${timePart}Z`;
                     timestamp = new Date(fullDatetime).getTime();
 
-                    // ✅ Adjust timestamp based on interval
-                    // For 5m: each candle should be 5 minutes apart
-                    // So add index * 5 * 60000ms instead of just index * 60000ms
-                    timestamp = timestamp + (index * baseIntervalMs * (multiplier - 1));
+                    // ✅ FIX 1: ONLY apply multiplier if data does NOT already have correct spacing
+                    // This prevents double-adjustment when data is already at correct interval
+                    if (!isAlreadySpaced) {
+                        // Data needs scaling (e.g., 1m data loaded as 5m)
+                        timestamp = timestamp + (index * baseIntervalMs * (multiplier - 1));
+                        if (index < 3) {
+                            console.log(`[API/Start] Applied multiplier to index ${index}: +${index * baseIntervalMs * (multiplier - 1)}ms`);
+                        }
+                    }
                 } else {
                     // No date in filename - cannot parse reliably
                     console.warn(`[API] Time-only format "${candle.time}" but no date in filename "${selectedFile}"`);
@@ -137,38 +184,71 @@ export async function GET(request: Request) {
                 timestamp = NaN;
             }
 
-            // Validation
+            // ✅ FIX 3: Strict validation - NO FALLBACK!
             if (isNaN(timestamp)) {
-                // Fallback: use current time + offset (last resort)
-                console.warn(`[API] Using fallback timestamp for candle ${index}: "${candle.time}"`);
-                return {
-                    t: Date.now() + (index * baseIntervalMs * multiplier),
-                    o: candle.open,
-                    h: candle.high,
-                    l: candle.low,
-                    c: candle.close,
-                    v: candle.volume,
-                };
+                console.error(`[API] ❌ SKIP candle ${index}: invalid timestamp "${candle.time}"`);
+                return null; // Return null instead of fallback
+            }
+
+            // ✅ DATA SANITIZATION: Swap high/low if invalid
+            let high = candle.high;
+            let low = candle.low;
+            if (high < low) {
+                console.warn(`[API] ⚠️ Candle ${index}: high (${high}) < low (${low}), swapping values`);
+                [high, low] = [low, high];
             }
 
             return {
-                t: timestamp, // ✅ Now correct for both formats!
+                t: timestamp,
                 o: candle.open,
-                h: candle.high,
-                l: candle.low,
+                h: high,
+                l: low,
                 c: candle.close,
                 v: candle.volume,
             };
         });
 
-        // Urutkan data berdasarkan waktu (Wajib!)
-        candlesWithTimestamp.sort((a: any, b: any) => a.t - b.t);
+        // ✅ FIX 3: Filter out failed parses (null values)
+        type CandleData = { t: number; o: number; h: number; l: number; c: number; v: number } | null;
+        const validCandles = (candlesWithTimestamp as CandleData[]).filter((c): c is NonNullable<CandleData> => c !== null);
+
+        const rejectedCount = rawData.length - validCandles.length;
+        if (rejectedCount > 0) {
+            console.warn(`[API/Start] ⚠️ Rejected ${rejectedCount}/${rawData.length} candles (${((rejectedCount / rawData.length) * 100).toFixed(1)}%) due to invalid timestamps`);
+        }
+
+        // Ensure monotonic timestamps
+        validCandles.sort((a: any, b: any) => a.t - b.t);
+
+        // ✅ FIX 3: Detect and fix duplicate timestamps
+        const duplicates = validCandles.filter((c: any, i: number, arr: any[]) =>
+            i > 0 && c.t === arr[i - 1].t
+        );
+
+        if (duplicates.length > 0) {
+            console.warn(`[API/Start] ⚠️ Found ${duplicates.length} duplicate timestamps, de-duplicating...`);
+
+            // De-duplicate by adding 1ms offset
+            validCandles.forEach((c: any, i: number) => {
+                if (i > 0 && c.t === validCandles[i - 1].t) {
+                    c.t += 1; // Add 1ms to make unique
+                }
+            });
+        }
 
         return NextResponse.json({
             success: true,
             data: {
                 ticker,
-                candles: candlesWithTimestamp,
+                candles: validCandles,
+                metadata: {
+                    total: rawData.length,
+                    valid: validCandles.length,
+                    rejected: rejectedCount,
+                    duplicatesFixed: duplicates.length,
+                    interval: requestedInterval,
+                    intervalDetected: isAlreadySpaced ? 'pre-spaced' : 'scaled'
+                }
             },
         });
 

@@ -120,9 +120,9 @@ export const TradingChart = memo(function TradingChart({ className = '' }: Tradi
             // Bersihkan & Set Data Baru
             candleSeriesRef.current.setData(candleData);
 
-            // ✅ FIX: Auto-zoom to show last ~100 candles (not all 3000+!)
+            // ✅ FIX: Auto-zoom to show last ~150 candles (not all 3000+!)
             // This ensures simulation candles are visible at readable zoom level
-            const barCount = Math.min(100, candleHistory.length);
+            const barCount = Math.min(150, candleHistory.length);
             mainChartRef.current.timeScale().setVisibleLogicalRange({
                 from: candleHistory.length - barCount,
                 to: candleHistory.length - 1

@@ -58,6 +58,64 @@ interface PriceAnchor {
 }
 
 // ============================================================================
+// Market Configuration (for gap handling)
+// ============================================================================
+
+interface MarketConfig {
+    timezone: string;
+    openHour: number;
+    closeHour: number;
+    lunchBreakStart: number;  // 11.5 = 11:30
+    lunchBreakEnd: number;    // 13.5 = 13:30
+    filterEnabled: boolean;
+}
+
+// Default IDX (Indonesia Stock Exchange) market config
+const DEFAULT_MARKET_CONFIG: MarketConfig = {
+    timezone: 'Asia/Jakarta',
+    openHour: 9,
+    closeHour: 16,
+    lunchBreakStart: 11.5,  // 11:30 WIB
+    lunchBreakEnd: 13.5,    // 13:30 WIB
+    filterEnabled: true
+};
+
+/**
+ * Check if timestamp is during lunch break
+ * @param timestamp - Unix timestamp in milliseconds
+ * @param config - Market configuration
+ * @returns true if during lunch break
+ */
+function isLunchBreak(timestamp: number, config: MarketConfig = DEFAULT_MARKET_CONFIG): boolean {
+    if (!config.filterEnabled) return false;
+
+    const date = new Date(timestamp);
+    // Get hour in configured timezone
+    const hourStr = date.toLocaleString('en-US', {
+        hour: 'numeric',
+        hour12: false,
+        timeZone: config.timezone
+    });
+    const minuteStr = date.toLocaleString('en-US', {
+        minute: 'numeric',
+        timeZone: config.timezone
+    });
+
+    const hour = parseInt(hourStr) + parseInt(minuteStr) / 60;
+
+    return hour >= config.lunchBreakStart && hour < config.lunchBreakEnd;
+}
+
+/**
+ * Calculate average volume for volume-based pacing
+ */
+function calculateAverageVolume(candles: Candle[]): number {
+    if (candles.length === 0) return 1;
+    const total = candles.reduce((sum, c) => sum + c.v, 0);
+    return total / candles.length;
+}
+
+// ============================================================================
 // Price Path Generator (Brownian Bridge Logic)
 // ============================================================================
 
@@ -329,6 +387,12 @@ class SimulationEngine {
         close: number;
     } | null = null;
 
+    // ✅ NEW: Volume-based pacing
+    private averageVolume: number = 1;
+
+    // ✅ NEW: Market config for gap handling (configurable)
+    private marketConfig: MarketConfig = DEFAULT_MARKET_CONFIG;
+
     constructor() {
         console.log('[SimulationWorker] Engine initialized');
     }
@@ -339,7 +403,7 @@ class SimulationEngine {
 
         // PRE-PROCESS DATA DI WORKER
         // Pastikan candle.t dikonversi ke millisecond number yang valid SEBELUM masuk logic simulasi
-        this.candles = candles.map(c => {
+        const processedCandles = candles.map(c => {
             let timestamp: number;
             const rawTimestamp: any = c.t; // Type as any first to allow instanceof check
 
@@ -361,8 +425,22 @@ class SimulationEngine {
         });
 
         // ✅ FIX: Sort candles by timestamp untuk ensure monotonic time
-        this.candles.sort((a, b) => a.t - b.t);
-        console.log(`[SimulationWorker] ✅ Sorted ${this.candles.length} candles by time`);
+        processedCandles.sort((a, b) => a.t - b.t);
+
+        // ✅ NEW: Filter out lunch break candles (IDX: 11:30-13:30 WIB)
+        const beforeFilter = processedCandles.length;
+        this.candles = processedCandles.filter(c => !isLunchBreak(c.t, this.marketConfig));
+        const skippedCount = beforeFilter - this.candles.length;
+
+        if (skippedCount > 0) {
+            console.log(`[SimulationWorker] ⏭️ Skipped ${skippedCount} lunch break candles (${this.marketConfig.lunchBreakStart}:00 - ${this.marketConfig.lunchBreakEnd}:00 ${this.marketConfig.timezone})`);
+        }
+
+        console.log(`[SimulationWorker] ✅ Processing ${this.candles.length} candles (sorted, filtered)`);
+
+        // ✅ NEW: Calculate average volume for volume-based pacing
+        this.averageVolume = calculateAverageVolume(this.candles);
+        console.log(`[SimulationWorker] 📊 Average volume: ${this.averageVolume.toLocaleString()}`);
 
         this.currentCandleIndex = 0;
         this.currentTickIndex = 0;
@@ -373,7 +451,7 @@ class SimulationEngine {
 
             // ✅ NO HISTORY_READY - History is managed by page.tsx via loadSimulationDay
             // Worker only handles simulation data (future candles)
-            postMessage({ type: 'DATA_READY', totalCandles: candles.length });
+            postMessage({ type: 'DATA_READY', totalCandles: this.candles.length, skippedLunchBreak: skippedCount });
         }
     }
 
@@ -482,10 +560,11 @@ class SimulationEngine {
     }
 
     private startTickLoop() {
-        // ✅ REAL-TIME PLAYBACK MODE
+        // ✅ REAL-TIME PLAYBACK MODE with VOLUME-BASED PACING
         // 1m candle at 1x speed = 60 seconds real-time
         // 5m candle at 1x speed = 300 seconds real-time
         // Speed multiplier: 10x makes 1m candle = 6 seconds
+        // Volume modifier: high volume = faster ticks, low volume = slower ticks
 
         const candle = this.candles[this.currentCandleIndex];
         const nextCandle = this.candles[this.currentCandleIndex + 1];
@@ -498,14 +577,30 @@ class SimulationEngine {
         // Calculate base tick duration for 1x speed
         const baseTickDuration = candleDuration / this.numTicks;
 
-        // Adjust for playback speed (higher speed = shorter tick duration)
-        const tickDuration = baseTickDuration / this.playbackSpeed;
+        // ✅ NEW: Volume-based dynamic pacing
+        // High volume candles = faster ticks (more market activity)
+        // Low volume candles = slower ticks (less activity)
+        // Ratio clamped between 0.5x and 2x to prevent extreme speeds
+        const volumeRatio = this.averageVolume > 0
+            ? candle.v / this.averageVolume
+            : 1;
 
-        console.log(`[SimulationWorker] ⏱️ Real-time mode: ${tickDuration}ms per tick (candle: ${candleDuration}ms, speed: ${this.playbackSpeed}x, total: ${candleDuration / this.playbackSpeed}ms per candle)`);
+        // Clamp between 0.5 (2x slower) and 2.0 (2x faster)
+        const volumeModifier = Math.max(0.5, Math.min(2.0, volumeRatio));
+
+        // Apply speed + volume modifiers
+        // Higher volumeModifier = faster ticks, so we DIVIDE by it
+        const tickDuration = baseTickDuration / (this.playbackSpeed * volumeModifier);
+
+        // Ensure minimum tick duration (prevent CPU overload)
+        const MIN_TICK_DURATION = 10; // 10ms minimum
+        const finalTickDuration = Math.max(MIN_TICK_DURATION, tickDuration);
+
+        console.log(`[SimulationWorker] ⏱️ Real-time mode: ${finalTickDuration.toFixed(1)}ms per tick (speed: ${this.playbackSpeed}x, volume: ${volumeModifier.toFixed(2)}x, candle: ${candleDuration}ms)`);
 
         this.tickInterval = setInterval(() => {
             this.processTick();
-        }, tickDuration) as any;
+        }, finalTickDuration) as any;
     }
 
     private stopTickLoop() {
@@ -598,6 +693,12 @@ class SimulationEngine {
 
             // Generate paths for next candle
             this.regeneratePaths();
+
+            // ✅ NEW: Restart tick loop to apply new volume-based pacing
+            // Each candle has different volume, so tick interval should change
+            this.stopTickLoop();
+            this.startTickLoop();
+
             postMessage({ type: 'CANDLE_CHANGE', candleIndex: this.currentCandleIndex });
         }
     }
