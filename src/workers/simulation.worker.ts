@@ -437,7 +437,12 @@ function generateHammerPath(candle: Candle, tickCount: number, context: MarketCo
     // Phase 2: Recovery to Close (buying pressure)
     for (let i = dropPhase; i < tickCount; i++) {
         const progress = (i - dropPhase) / (tickCount - dropPhase);
-        let price = candle.l + (candle.c - candle.l) * easeOutQuad(progress);
+
+        // 🔥 Trend modulation: Uptrend = faster recovery, Downtrend = slower recovery
+        const trendBias = context.trend === 'uptrend' ? 1.2 : context.trend === 'downtrend' ? 0.8 : 1.0;
+        const modulatedProgress = Math.min(1, progress * trendBias);
+
+        let price = candle.l + (candle.c - candle.l) * easeOutQuad(modulatedProgress);
 
         // Add volatility-based noise
         if (context.volatility > 1.5) {
@@ -469,7 +474,12 @@ function generateShootingStarPath(candle: Candle, tickCount: number, context: Ma
     // Phase 2: Dump to Close (rejection)
     for (let i = pumpPhase; i < tickCount; i++) {
         const progress = (i - pumpPhase) / (tickCount - pumpPhase);
-        let price = candle.h - (candle.h - candle.c) * easeInQuad(progress);
+
+        // 🔥 Trend modulation: Downtrend = faster dump, Uptrend = slower dump
+        const trendBias = context.trend === 'downtrend' ? 1.3 : context.trend === 'uptrend' ? 0.7 : 1.0;
+        const modulatedProgress = Math.min(1, progress * trendBias);
+
+        let price = candle.h - (candle.h - candle.c) * easeInQuad(modulatedProgress);
 
         // Add volatility-based noise
         if (context.volatility > 1.5) {
@@ -495,8 +505,12 @@ function generateMarubozuPath(candle: Candle, tickCount: number, context: Market
         const progress = i / (tickCount - 1);
         let price = candle.o + (candle.c - candle.o) * progress;
 
-        // Minimal pullbacks (<5% of range)
-        const maxNoise = (candle.h - candle.l) * 0.03;
+        // 🔥 Trend modulation: Aligned trend = even less pullback (strong momentum)
+        const trendAligned = (isBullish && context.trend === 'uptrend') || (!isBullish && context.trend === 'downtrend');
+        const maxNoise = trendAligned
+            ? (candle.h - candle.l) * 0.01  // 1% noise when aligned
+            : (candle.h - candle.l) * 0.03; // 3% noise when not aligned
+
         const noise = (Math.random() - 0.5) * maxNoise;
         price += noise;
 
@@ -521,8 +535,11 @@ function generateDojiPath(candle: Candle, tickCount: number, context: MarketCont
     path.push(currentPrice);
 
     for (let i = 1; i < tickCount - 1; i++) {
-        // Random walk with bias towards H/L
-        const target = Math.random() < 0.3 ? candle.h : Math.random() < 0.6 ? candle.l : midpoint;
+        // 🔥 Trend modulation: Bias target selection based on trend
+        const upBias = context.trend === 'uptrend' ? 0.4 : context.trend === 'downtrend' ? 0.2 : 0.3;
+        const lowBias = context.trend === 'downtrend' ? 0.7 : context.trend === 'uptrend' ? 0.5 : 0.6;
+
+        const target = Math.random() < upBias ? candle.h : Math.random() < lowBias ? candle.l : midpoint;
         const step = (target - currentPrice) * 0.3 + (Math.random() - 0.5) * range * 0.1;
 
         currentPrice = Math.max(candle.l, Math.min(candle.h, currentPrice + step));
@@ -538,13 +555,18 @@ function generateDojiPath(candle: Candle, tickCount: number, context: MarketCont
  */
 function generateEngulfingPath(candle: Candle, tickCount: number, context: MarketContext, isBullish: boolean): number[] {
     const path: number[] = [];
-    const accelerationPhase = Math.floor(tickCount * 0.4);  // 40% acceleration
+    // 🔥 Trend modulation: Aligned trend = stronger acceleration
+    const trendAligned = (isBullish && context.trend === 'uptrend') || (!isBullish && context.trend === 'downtrend');
+    const accelerationPhase = Math.floor(tickCount * (trendAligned ? 0.3 : 0.4));  // Faster when aligned
 
     if (isBullish) {
         // Bullish engulfing: Accelerating upward momentum
         for (let i = 0; i < tickCount; i++) {
             const progress = i / (tickCount - 1);
-            const easedProgress = progress < 0.4 ? easeInQuad(progress / 0.4) * 0.4 : 0.4 + easeOutQuad((progress - 0.4) / 0.6) * 0.6;
+            const accelRatio = trendAligned ? 0.3 : 0.4;
+            const easedProgress = progress < accelRatio
+                ? easeInQuad(progress / accelRatio) * accelRatio
+                : accelRatio + easeOutQuad((progress - accelRatio) / (1 - accelRatio)) * (1 - accelRatio);
             let price = candle.o + (candle.c - candle.o) * easedProgress;
 
             // Touch high during momentum
@@ -559,7 +581,10 @@ function generateEngulfingPath(candle: Candle, tickCount: number, context: Marke
         // Bearish engulfing: Accelerating downward momentum
         for (let i = 0; i < tickCount; i++) {
             const progress = i / (tickCount - 1);
-            const easedProgress = progress < 0.4 ? easeInQuad(progress / 0.4) * 0.4 : 0.4 + easeOutQuad((progress - 0.4) / 0.6) * 0.6;
+            const accelRatio = trendAligned ? 0.3 : 0.4;
+            const easedProgress = progress < accelRatio
+                ? easeInQuad(progress / accelRatio) * accelRatio
+                : accelRatio + easeOutQuad((progress - accelRatio) / (1 - accelRatio)) * (1 - accelRatio);
             let price = candle.o - (candle.o - candle.c) * easedProgress;
 
             // Touch low during momentum

@@ -193,6 +193,44 @@ function isLunchBreak(timestamp: number, timezone: string): boolean {
 }
 
 // ============================================================================
+// 🔥 FIX C: Centralized Time Conversion Utility
+// ============================================================================
+
+/**
+ * Normalize any timestamp format to seconds (Unix timestamp)
+ * Handles: milliseconds, Date objects, ISO strings
+ * Ensures consistent conversion across entire pipeline
+ */
+export function normalizeTimestamp(rawTime: number | Date | string | undefined): number {
+    if (rawTime === undefined || rawTime === null) {
+        console.error('[Time] Invalid timestamp: undefined/null');
+        return Math.floor(Date.now() / 1000);
+    }
+
+    if (typeof rawTime === 'number') {
+        // If > 10 billion, it's milliseconds (e.g., 1736000000000)
+        // Otherwise it's already seconds (e.g., 1736000000)
+        return rawTime > 10000000000 ? Math.floor(rawTime / 1000) : rawTime;
+    }
+
+    if (rawTime instanceof Date) {
+        return Math.floor(rawTime.getTime() / 1000);
+    }
+
+    if (typeof rawTime === 'string') {
+        const parsed = new Date(rawTime).getTime() / 1000;
+        if (isNaN(parsed)) {
+            console.error('[Time] Failed to parse timestamp string:', rawTime);
+            return Math.floor(Date.now() / 1000);
+        }
+        return Math.floor(parsed);
+    }
+
+    console.error('[Time] Unknown timestamp type:', typeof rawTime, rawTime);
+    return Math.floor(Date.now() / 1000);
+}
+
+// ============================================================================
 // Helper Functions
 // ============================================================================
 
@@ -331,26 +369,12 @@ export const useSimulationStore = create<SimulationState>()(
 
                 const converted: ChartCandle[] = [];
 
+                // Konversi semua candle ke format ChartCandle
                 candles.forEach((c, index) => {
-                    let timeInSeconds: number;
+                    const rawTime = c.t;
 
-                    // --- SANITASI EXTREME ---
-                    // Handle semua kemungkinan format timestamp dari JSON/API
-                    const rawTime = c.t as any;
-
-                    if (typeof rawTime === 'number') {
-                        timeInSeconds = rawTime > 10000000000 ? Math.floor(rawTime / 1000) : rawTime;
-                    } else if (rawTime instanceof Date) {
-                        timeInSeconds = Math.floor(rawTime.getTime() / 1000);
-                    } else if (typeof rawTime === 'string') {
-                        // Parse string ISO "2025-..."
-                        const parsed = new Date(rawTime).getTime() / 1000;
-                        timeInSeconds = isNaN(parsed) ? 0 : Math.floor(parsed);
-                    } else {
-                        // Fallback safety
-                        console.error(`[SimulationStore] Invalid timestamp at index ${index}:`, rawTime, typeof rawTime);
-                        timeInSeconds = Math.floor(Date.now() / 1000);
-                    }
+                    // 🔥 FIX C: Use centralized time normalization
+                    const timeInSeconds = normalizeTimestamp(rawTime);
 
                     // Push data bersih
                     converted.push({
@@ -365,8 +389,44 @@ export const useSimulationStore = create<SimulationState>()(
                 // Sortir paksa di store untuk menjamin urutan
                 converted.sort((a, b) => a.time - b.time);
 
-                state.candleHistory = converted;
-                console.log(`[SimulationStore] ✅ Converted ${converted.length} candles, first time=${converted[0]?.time}, last time=${converted[converted.length - 1]?.time}`);
+                // 🔥 FIX B: Deduplicate timestamps to prevent "barcode" effect
+                // Merge candles with same timestamp (take last OHLC values)
+                const deduplicated: ChartCandle[] = [];
+                for (let i = 0; i < converted.length; i++) {
+                    const current = converted[i];
+
+                    // Check if next candle has same timestamp
+                    if (i < converted.length - 1 && converted[i + 1].time === current.time) {
+                        // Skip this, will be merged with next
+                        continue;
+                    }
+
+                    // If previous had same time, this is the duplicate - use this one's OHLC
+                    if (i > 0 && converted[i - 1].time === current.time) {
+                        // Replace deduplicated's last entry (merge)
+                        const merged = {
+                            time: current.time,
+                            open: converted[i - 1].open,  // Keep first open
+                            high: Math.max(converted[i - 1].high, current.high),  // Max high
+                            low: Math.min(converted[i - 1].low, current.low),      // Min low
+                            close: current.close,                                   // Use last close
+                        };
+                        deduplicated[deduplicated.length - 1] = merged;
+                    } else {
+                        // No duplicate, add as-is
+                        deduplicated.push(current);
+                    }
+                }
+
+                const originalCount = converted.length;
+                const removedDuplicates = originalCount - deduplicated.length;
+
+                if (removedDuplicates > 0) {
+                    console.log(`[SimulationStore] 🔧 Removed ${removedDuplicates} duplicate timestamps`);
+                }
+
+                state.candleHistory = deduplicated;
+                console.log(`[SimulationStore] ✅ Converted ${deduplicated.length} candles, first time=${deduplicated[0]?.time}, last time=${deduplicated[deduplicated.length - 1]?.time}`);
             });
         },
 

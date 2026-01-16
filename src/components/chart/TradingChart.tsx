@@ -10,7 +10,7 @@ import {
     type CandlestickData,
     type Time,
 } from 'lightweight-charts';
-import { useSimulationStore } from '@/stores/useSimulationStore';
+import { useSimulationStore, normalizeTimestamp } from '@/stores/useSimulationStore';
 import { simTelemetry } from '@/lib/telemetry';
 
 interface TradingChartProps {
@@ -175,15 +175,8 @@ export const TradingChart = memo(function TradingChart({ className = '' }: Tradi
                 const currentCandle = state.currentCandle;
                 if (!currentCandle) return;
 
-                // 1. Sanitasi Waktu
-                let time = currentCandle.time;
-
-                // Pastikan format detik (bukan ms)
-                if (typeof time === 'number' && time > 10000000000) {
-                    time = Math.floor(time / 1000);
-                } else if (typeof time === 'string') {
-                    time = new Date(time).getTime() / 1000;
-                }
+                // 🔥 FIX C: Use centralized time normalization
+                const time = normalizeTimestamp(currentCandle.time);
 
                 // 2. Buffer update (akan di-flush di next frame)
                 pendingUpdateRef.current = {
