@@ -4,6 +4,118 @@ import path from 'path';
 
 export const dynamic = 'force-dynamic';
 
+// ============================================================================
+// 🆕 Phase 2: Multi-Timeframe Aggregation Functions
+// ============================================================================
+
+type ParsedCandle = {
+    t: number; // timestamp in ms
+    o: number; // open
+    h: number; // high
+    l: number; // low
+    c: number; // close
+    v: number; // volume
+};
+
+/**
+ * 🆕 Detect actual data interval from timestamps
+ * Returns interval in minutes
+ */
+function detectDataInterval(candles: ParsedCandle[]): number {
+    if (candles.length < 2) return 1;
+
+    // Sample first 10 candle intervals
+    const diffs = candles.slice(0, Math.min(10, candles.length - 1)).map((c, i) =>
+        candles[i + 1].t - c.t
+    ).filter(d => d > 0);
+
+    if (diffs.length === 0) return 1;
+
+    const avgDiff = diffs.reduce((sum, d) => sum + d, 0) / diffs.length;
+    const intervalMinutes = Math.round(avgDiff / 60000); // Convert ms to minutes
+
+    console.log(`[Aggregation] Detected interval: ${intervalMinutes}m (avg diff: ${avgDiff}ms)`);
+
+    return intervalMinutes;
+}
+
+/**
+ * 🆕 Create aggregated candle from bucket
+ */
+function createAggregatedCandle(
+    bucket: ParsedCandle[],
+    startTime: number
+): ParsedCandle {
+    return {
+        t: startTime,
+        o: bucket[0].o,                             // First open
+        h: Math.max(...bucket.map(c => c.h)),       // Max high
+        l: Math.min(...bucket.map(c => c.l)),       // Min low
+        c: bucket[bucket.length - 1].c,             // Last close
+        v: bucket.reduce((sum, c) => sum + c.v, 0)  // Sum volume
+    };
+}
+
+/**
+ * 🆕 Aggregate candles - timestamp-based bucketing
+ * Handles missing candles and gaps correctly
+ */
+function aggregateCandles(
+    candles: ParsedCandle[],
+    targetIntervalMinutes: number
+): ParsedCandle[] {
+    if (targetIntervalMinutes === 1) return candles;
+
+    // 🆕 FIX: Skip if data already at target interval or higher
+    const dataInterval = detectDataInterval(candles);
+    if (dataInterval >= targetIntervalMinutes) {
+        console.log(`[Aggregation] ✅ Data already ${dataInterval}m, skipping aggregation`);
+        return candles;
+    }
+
+    console.log(`[Aggregation] 🔄 Aggregating ${dataInterval}m → ${targetIntervalMinutes}m`);
+
+    const aggregated: ParsedCandle[] = [];
+    const targetIntervalSec = targetIntervalMinutes * 60;
+    const targetIntervalMs = targetIntervalMinutes * 60000;
+
+    // 🆕 FIX: Bucket by timestamp alignment (floor to interval boundary)
+    let bucket: ParsedCandle[] = [];
+    let bucketStartTime: number | null = null;
+
+    candles.forEach((candle, idx) => {
+        // Calculate which bucket this candle belongs to
+        const candleBucket = Math.floor(candle.t / targetIntervalMs) * targetIntervalMs;
+
+        // First candle or new bucket
+        if (bucketStartTime === null) {
+            bucketStartTime = candleBucket;
+        }
+
+        // New bucket detected
+        if (candleBucket !== bucketStartTime && bucket.length > 0) {
+            aggregated.push(createAggregatedCandle(bucket, bucketStartTime));
+            bucket = [];
+            bucketStartTime = candleBucket;
+        }
+
+        bucket.push(candle);
+
+        // Last candle - flush bucket
+        if (idx === candles.length - 1 && bucket.length > 0) {
+            aggregated.push(createAggregatedCandle(bucket, bucketStartTime!));
+        }
+    });
+
+    console.log(`[Aggregation] ✅ Aggregated: ${candles.length} → ${aggregated.length} candles`);
+
+    return aggregated;
+}
+
+// ============================================================================
+// API Handler
+// ============================================================================
+
 export async function GET(request: Request) {
     try {
         const dataDir = path.join(process.cwd(), 'public', 'simulation-data');
@@ -247,18 +359,41 @@ export async function GET(request: Request) {
             });
         }
 
+        // 🆕 PHASE 2: Apply multi-timeframe aggregation if needed
+        const requestedMinutes = requestedInterval === '5m' ? 5
+            : requestedInterval === '15m' ? 15
+                : requestedInterval === '30m' ? 30
+                    : requestedInterval === '60m' || requestedInterval === '1h' ? 60
+                        : 1;
+
+        let processedCandles = validCandles;
+        let aggregationInfo = 'none';
+
+        if (requestedMinutes > 1) {
+            const before = processedCandles.length;
+            processedCandles = aggregateCandles(processedCandles as ParsedCandle[], requestedMinutes);
+            const after = processedCandles.length;
+
+            aggregationInfo = before === after
+                ? 'skipped (already aggregated)'
+                : `${before} → ${after} candles`;
+
+            console.log(`[API/Start] 📊 Aggregation ${requestedInterval}: ${aggregationInfo}`);
+        }
+
         return NextResponse.json({
             success: true,
             data: {
                 ticker,
-                candles: validCandles,
+                candles: processedCandles,
                 metadata: {
                     total: rawData.length,
                     valid: validCandles.length,
                     rejected: rejectedCount,
                     duplicatesFixed: duplicates.length,
                     interval: requestedInterval,
-                    intervalDetected: isAlreadySpaced ? 'pre-spaced' : 'scaled'
+                    intervalDetected: isAlreadySpaced ? 'pre-spaced' : 'scaled',
+                    aggregation: aggregationInfo // 🆕 Add aggregation info
                 }
             },
         });

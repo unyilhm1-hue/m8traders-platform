@@ -57,6 +57,13 @@ interface PriceAnchor {
     price: number;
 }
 
+interface TickSchedule {
+    tickIndex: number;
+    targetTime: number;  // When this tick should fire (in ms from candle start)
+    price: number;
+    volume: number;
+}
+
 // ============================================================================
 // Market Configuration (for gap handling)
 // ============================================================================
@@ -465,7 +472,13 @@ class SimulationEngine {
     private playbackSpeed: number = 1; // 1 = realtime
     private tickInterval: number | null = null;
 
-    // Current candle tick data
+    // 🆕 NEW: Tick Scheduling System
+    private tickSchedule: TickSchedule[] = [];  // Pre-computed schedule for current candle
+    private candleStartTime: number = 0;        // Real-world time when candle started (performance.now() if available)
+    private lastTickFiredIndex: number = -1;    // Guard against duplicate firing
+    private readonly MAX_TICKS_PER_POLL = 10;   // Anti-burst throttle (max 600 ticks/sec)
+
+    // Current candle tick data (will be deprecated after refactor)
     private pricePath: number[] = [];
     private volumePath: number[] = [];
     private numTicks: number = 60; // ✅ Increased from 20 to 60 for smoother movement (1 tick/second at 1x)
@@ -474,7 +487,7 @@ class SimulationEngine {
     private lastMessageTime: number = 0;
     private readonly MESSAGE_THROTTLE_MS: number = 16; // ~60 FPS
 
-    // ✅ CANDLE_UPDATE throttle (prevent UI flooding)
+    // ✅ CANDLE_UPDATE throttle (prevent UI flooding) - will be removed after refactor
     private lastCandleUpdateTime: number = 0;
     private readonly CANDLE_UPDATE_THROTTLE_MS: number = 50; // 20 FPS max
 
@@ -654,6 +667,75 @@ class SimulationEngine {
         this.initializeAggregatedCandle();
     }
 
+    /**
+     * 🆕 Generate pre-computed tick schedule with normalization
+     * Fixes speed 1x determinism + all 7 critical guards
+     */
+    private generateTickSchedule(): TickSchedule[] {
+        const candle = this.candles[this.currentCandleIndex];
+        const nextCandle = this.candles[this.currentCandleIndex + 1];
+
+        // ✅ FIX #2: Detect timeframe from data, bukan hardcoded 60s
+        const candleDuration = nextCandle
+            ? (nextCandle.t - candle.t)
+            : this.expectedCandleDuration; // Use calculated expected duration
+
+        // Generate price path & volume distribution
+        const pricePath = generatePricePath(candle, this.numTicks);
+        const volumePath = distributeVolume(candle.v, this.numTicks);
+
+        // 🆕 FIX: Guard against volume 0
+        const safeAverageVolume = Math.max(1, this.averageVolume);
+        const volumeRatio = candle.v > 0 ? candle.v / safeAverageVolume : 1.0;
+
+        // Generate raw delays with volume-based density
+        const rawDelays: number[] = [];
+
+        for (let i = 0; i < this.numTicks; i++) {
+            // Base delay = equal distribution
+            const baseDelay = candleDuration / this.numTicks;
+
+            // 🆕 FIX: Symmetric variance (-250ms to +250ms)
+            const variance = (Math.random() - 0.5) * 500;
+
+            // 🆕 FIX: Safe volumeFactor (1/volumeRatio with guards)
+            // High volume = shorter delays (more ticks/sec)
+            // Low volume = longer delays (fewer ticks/sec)
+            const volumeFactor = volumeRatio > 0
+                ? Math.max(0.5, Math.min(2.0, 1 / volumeRatio))
+                : 1.0;
+
+            rawDelays.push(baseDelay * volumeFactor + variance);
+        }
+
+        // ✅ NORMALIZATION: Scale delays to fit exact candleDuration
+        const totalRawDelay = rawDelays.reduce((sum, d) => sum + d, 0);
+        const scaleFactor = totalRawDelay > 0 ? candleDuration / totalRawDelay : 1;
+
+        let cumulativeTime = 0;
+        const schedule: TickSchedule[] = [];
+
+        for (let i = 0; i < this.numTicks; i++) {
+            const normalizedDelay = rawDelays[i] * scaleFactor;
+            cumulativeTime += normalizedDelay;
+
+            // 🆕 FIX: Prevent last tick timestamp collision with nextCandle.t
+            const isFinalTick = i === this.numTicks - 1;
+            const targetTime = isFinalTick
+                ? Math.min(cumulativeTime, candleDuration - 1) // 1ms before next candle
+                : cumulativeTime;
+
+            schedule.push({
+                tickIndex: i,
+                targetTime,
+                price: pricePath[i],
+                volume: volumePath[i]
+            });
+        }
+
+        return schedule;
+    }
+
     private initializeAggregatedCandle() {
         const candle = this.candles[this.currentCandleIndex];
         if (!candle) return;
@@ -681,48 +763,129 @@ class SimulationEngine {
         this.currentAggregatedCandle.close = price;
     }
 
-    private startTickLoop() {
-        // ✅ REAL-TIME PLAYBACK MODE with VOLUME-BASED PACING
-        // 1m candle at 1x speed = 60 seconds real-time
-        // 5m candle at 1x speed = 300 seconds real-time
-        // Speed multiplier: 10x makes 1m candle = 6 seconds
-        // Volume modifier: high volume = faster ticks, low volume = slower ticks
+    /**
+     * 🆕 Poll ticks - Time-based execution with anti-burst throttling
+     */
+    private pollTicks() {
+        const now = typeof performance !== 'undefined'
+            ? performance.now()
+            : Date.now();
 
+        const elapsedTime = (now - this.candleStartTime) * this.playbackSpeed;
+
+        // 🆕 FIX: Throttle tick burst untuk speed tinggi
+        let ticksFiredThisPoll = 0;
+
+        while (this.currentTickIndex < this.tickSchedule.length) {
+            const tick = this.tickSchedule[this.currentTickIndex];
+
+            if (tick.targetTime > elapsedTime) {
+                break; // Belum waktunya
+            }
+
+            // 🆕 Anti-burst: Max 10 ticks per poll (60 FPS = 600 ticks/sec max)
+            if (ticksFiredThisPoll >= this.MAX_TICKS_PER_POLL) {
+                console.warn('[SimulationWorker] ⚠️ Tick burst detected, throttling');
+                break;
+            }
+
+            // 🆕 Guard duplicate firing
+            if (this.currentTickIndex === this.lastTickFiredIndex) {
+                console.error('[SimulationWorker] Duplicate tick fire prevented');
+                break;
+            }
+
+            this.fireTick(tick);
+            this.lastTickFiredIndex = this.currentTickIndex;
+            this.currentTickIndex++;
+            ticksFiredThisPoll++;
+        }
+
+        // Check if candle complete
+        if (this.currentTickIndex >= this.tickSchedule.length) {
+            this.advanceToNextCandle();
+        }
+    }
+
+    /**
+     * 🆕 Fire a single tick from pre-computed schedule
+     */
+    private fireTick(tick: TickSchedule) {
         const candle = this.candles[this.currentCandleIndex];
-        const nextCandle = this.candles[this.currentCandleIndex + 1];
+        const timestamp = candle.t + tick.targetTime;
 
-        // Calculate actual candle duration from data
-        const candleDuration = nextCandle
-            ? (nextCandle.t - candle.t)
-            : 60000; // Fallback to 1 minute
+        // Update aggregated candle
+        this.updateAggregatedCandle(tick.price, timestamp);
 
-        // Calculate base tick duration for 1x speed
-        const baseTickDuration = candleDuration / this.numTicks;
+        // Send tick message
+        postMessage({
+            type: 'TICK',
+            data: {
+                price: tick.price,
+                volume: tick.volume,
+                timestamp: Math.floor(timestamp),
+                candleIndex: this.currentCandleIndex,
+                tickIndex: tick.tickIndex
+            }
+        });
 
-        // ✅ NEW: Volume-based dynamic pacing
-        // High volume candles = faster ticks (more market activity)
-        // Low volume candles = slower ticks (less activity)
-        // Ratio clamped between 0.5x and 2x to prevent extreme speeds
-        const volumeRatio = this.averageVolume > 0
-            ? candle.v / this.averageVolume
-            : 1;
+        // Send candle update
+        if (this.currentAggregatedCandle) {
+            postMessage({
+                type: 'CANDLE_UPDATE',
+                candle: this.currentAggregatedCandle
+            });
+        }
+    }
 
-        // Clamp between 0.5 (2x slower) and 2.0 (2x faster)
-        const volumeModifier = Math.max(0.5, Math.min(2.0, volumeRatio));
+    /**
+     * 🆕 Advance to next candle
+     */
+    private advanceToNextCandle() {
+        this.currentTickIndex = 0;
+        this.currentCandleIndex++;
 
-        // Apply speed + volume modifiers
-        // Higher volumeModifier = faster ticks, so we DIVIDE by it
-        const tickDuration = baseTickDuration / (this.playbackSpeed * volumeModifier);
+        if (this.currentCandleIndex >= this.candles.length) {
+            console.log('[SimulationWorker] Simulation complete');
+            postMessage({ type: 'COMPLETE' });
+            this.stop();
+            return;
+        }
 
-        // Ensure minimum tick duration (prevent CPU overload)
-        const MIN_TICK_DURATION = 10; // 10ms minimum
-        const finalTickDuration = Math.max(MIN_TICK_DURATION, tickDuration);
+        // Generate new schedule & restart
+        this.tickSchedule = this.generateTickSchedule();
+        this.initializeAggregatedCandle();
+        this.lastTickFiredIndex = -1;
 
-        console.log(`[SimulationWorker] ⏱️ Real-time mode: ${finalTickDuration.toFixed(1)}ms per tick (speed: ${this.playbackSpeed}x, volume: ${volumeModifier.toFixed(2)}x, candle: ${candleDuration}ms)`);
+        // 🆕 Use performance.now() if available
+        this.candleStartTime = typeof performance !== 'undefined'
+            ? performance.now()
+            : Date.now();
 
+        postMessage({ type: 'CANDLE_CHANGE', candleIndex: this.currentCandleIndex });
+    }
+
+    /**
+     * 🆕 NEW: Polling-based tick loop for deterministic playback
+     * Speed 1x = truly realtime (1m candle = 60s, not affected by volume)
+     * Volume only affects tick density (number of price changes per second)
+     */
+    private startTickLoop() {
+        // Generate pre-computed tick schedule with normalization
+        this.tickSchedule = this.generateTickSchedule();
+        this.lastTickFiredIndex = -1;
+
+        // 🆕 Use performance.now() for more stable timing
+        this.candleStartTime = typeof performance !== 'undefined'
+            ? performance.now()
+            : Date.now();
+
+        console.log(`[SimulationWorker] ⏱️ Starting tick loop: ${this.tickSchedule.length} ticks scheduled, speed ${this.playbackSpeed}x`);
+
+        // Poll 60 FPS (16ms)
         this.tickInterval = setInterval(() => {
-            this.processTick();
-        }, finalTickDuration) as any;
+            this.pollTicks();
+        }, 16) as any;
     }
 
     private stopTickLoop() {

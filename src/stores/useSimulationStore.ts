@@ -130,6 +130,69 @@ const initialState = {
 };
 
 // ============================================================================
+// 🆕 Phase 3: Timezone-Aware Market Hours Utilities
+// ============================================================================
+
+/**
+ * Convert timestamp to market timezone and extract time components
+ */
+function toMarketTime(timestamp: number, timezone: string): { hour: number; minute: number; date: Date } {
+    const date = new Date(timestamp);
+
+    // Get hour and minute in market timezone
+    const hour = Number(date.toLocaleString('en-US', {
+        hour: 'numeric',
+        hour12: false,
+        timeZone: timezone
+    }));
+
+    const minute = Number(date.toLocaleString('en-US', {
+        minute: 'numeric',
+        timeZone: timezone
+    }));
+
+    return { hour, minute, date };
+}
+
+/**
+ * Check if timestamp is within market hours (minute precision)
+ * Market: 09:00 - 16:00
+ * Accept: hour=9 minute>=0 OR hour 10-15 OR hour=16 minute=0
+ */
+function isWithinMarketHours(
+    timestamp: number,
+    config: { timezone: string; openHour: number; closeHour: number }
+): boolean {
+    const { hour, minute } = toMarketTime(timestamp, config.timezone);
+
+    // Before market open (< 09:00)
+    if (hour < config.openHour) return false;
+
+    // After market close (> 16:00)
+    if (hour > config.closeHour) return false;
+
+    // Edge case: Exactly at close hour (16:xx)
+    // Accept ONLY 16:00 (last trading minute), reject 16:01+
+    if (hour === config.closeHour && minute > 0) return false;
+
+    return true;
+}
+
+/**
+ * Check if timestamp is during lunch break (IDX: 11:30-13:30 WIB)
+ */
+function isLunchBreak(timestamp: number, timezone: string): boolean {
+    const { hour, minute } = toMarketTime(timestamp, timezone);
+
+    // Lunch: 11:30 - 13:30
+    if (hour > 11 && hour < 13) return true;          // 12:xx (all of hour 12)
+    if (hour === 11 && minute >= 30) return true;     // 11:30-11:59
+    if (hour === 13 && minute < 30) return true;      // 13:00-13:29
+
+    return false;
+}
+
+// ============================================================================
 // Helper Functions
 // ============================================================================
 
@@ -358,26 +421,27 @@ export const useSimulationStore = create<SimulationState>()(
 
                     // ✅ FIX 2: Apply filter ONLY if enabled
                     if (marketConfig.filterEnabled) {
-                        // Get candle hour in configured timezone (0-23)
-                        const candleHourLocal = Number(candleDateObj.toLocaleString('en-US', {
-                            hour: 'numeric',
-                            hour12: false,
-                            timeZone: marketConfig.timezone
-                        }));
+                        // 🆕 PHASE 3: Use minute-precision filtering with lunch break
+                        const withinMarketHours = isWithinMarketHours(tsMs, marketConfig);
+                        const duringLunchBreak = isLunchBreak(tsMs, marketConfig.timezone);
 
-                        // 🐛 DEBUG: Log filtering details (first 10 only)
-                        if (simulationQueue.length < 10) {
-                            console.log(`[Store] Candle ${simulationQueue.length}: ${candleDateObj.toISOString()} -> ${marketConfig.timezone} Hour: ${candleHourLocal}, Match: ${candleHourLocal >= marketConfig.openHour && candleHourLocal <= marketConfig.closeHour}`);
-                        }
-
-                        // Filter by market hours
-                        if (candleHourLocal >= marketConfig.openHour && candleHourLocal <= marketConfig.closeHour) {
+                        // Accept ONLY if within market hours AND NOT during lunch
+                        if (withinMarketHours && !duringLunchBreak) {
                             simulationQueue.push({
                                 ...c,
                                 t: tsMs // Store in MS for Worker
                             });
-                        } else if (simulationQueue.length < 10) {
-                            console.log(`[Store] ❌ Rejected (hour ${candleHourLocal} outside ${marketConfig.openHour}-${marketConfig.closeHour})`);
+
+                            // 🐛 DEBUG: Log first 10 accepted candles
+                            if (simulationQueue.length <= 10) {
+                                const { hour, minute } = toMarketTime(tsMs, marketConfig.timezone);
+                                console.log(`[Store] ✅ Accepted ${simulationQueue.length}: ${hour}:${minute.toString().padStart(2, '0')} (market: true, lunch: false)`);
+                            }
+                        } else if (simulationQueue.length < 200) {
+                            // Log first 200 rejections for debugging
+                            const { hour, minute } = toMarketTime(tsMs, marketConfig.timezone);
+                            const reason = !withinMarketHours ? 'outside market hours' : 'lunch break';
+                            console.log(`[Store] ❌ Rejected ${hour}:${minute.toString().padStart(2, '0')} (${reason})`);
                         }
                     } else {
                         // No filtering - accept all candles on the selected date
