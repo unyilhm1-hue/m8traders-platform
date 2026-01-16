@@ -79,11 +79,23 @@ function SimDemoPageContent() {
                 console.log(`   - Interval: ${loadedInterval}`);
                 console.log(`   - Aggregated: ${wasAggregated ? 'Yes' : 'No'}`);
 
+                // 🚀 FIX 1: Hydrate baseData and baseInterval for Master Blueprint
+                const store = useSimulationStore.getState();
+
+                // Combine buffers for baseData (needed for resampling)
+                const allBaseData = [...historyBuffer, ...simulationQueue];
+
+                useSimulationStore.setState({
+                    baseData: allBaseData,
+                    baseInterval: loadedInterval as any,
+                    currentTicker: ticker,
+                    bufferData: historyBuffer
+                });
+
                 // Load history candles to chart (for visual context)
-                const setCandleHistory = useSimulationStore.getState().setCandleHistory;
                 if (historyBuffer && historyBuffer.length > 0) {
-                    setCandleHistory(historyBuffer);
-                    console.log(`📊 [SimDemoPage] Loaded ${historyBuffer.length} history candles to chart`);
+                    store.setCandleHistory(historyBuffer);
+                    console.log(`📊 [SimDemoPage] Loaded ${historyBuffer.length} history + base data hydrated`);
                 }
 
                 // 🔥 NEW: Send split buffers to worker via initWithBuffers

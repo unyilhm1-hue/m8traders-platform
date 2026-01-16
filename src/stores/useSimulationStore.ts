@@ -664,6 +664,21 @@ export const useSimulationStore = create<SimulationState>()(
             const cached = state.cachedIntervals.get(targetInterval);
             if (cached) {
                 console.log(`[Store] ✅ Using cached ${targetInterval} data (${cached.length} candles)`);
+
+                // 🚀 FIX 2: Sync state, chart, and worker
+                set((state) => {
+                    state.baseInterval = targetInterval;
+                    // Update chart history with resampled candles
+                    state.candleHistory = cached.map(c => ({
+                        time: typeof c.time === 'number' ? c.time / 1000 : Math.floor(new Date(c.time).getTime() / 1000),
+                        open: c.open,
+                        high: c.high,
+                        low: c.low,
+                        close: c.close
+                    }));
+                });
+
+                console.log(`[Store] 📊 Chart updated with ${cached.length} ${targetInterval} candles`);
                 return cached;
             }
 
@@ -675,12 +690,23 @@ export const useSimulationStore = create<SimulationState>()(
                     targetInterval
                 );
 
-                // Cache result
+                // Cache result and sync state
                 set((state) => {
                     state.cachedIntervals.set(targetInterval, resampled);
+                    state.baseInterval = targetInterval;
+
+                    // Update chart history with resampled candles
+                    state.candleHistory = resampled.map(c => ({
+                        time: typeof c.time === 'number' ? c.time / 1000 : Math.floor(new Date(c.time).getTime() / 1000),
+                        open: c.open,
+                        high: c.high,
+                        low: c.low,
+                        close: c.close
+                    }));
                 });
 
                 console.log(`[Store] ✅ Resampled ${state.baseInterval} → ${targetInterval} (${resampled.length} candles)`);
+                console.log(`[Store] 📊 Chart updated with resampled data`);
                 return resampled;
             } catch (error) {
                 console.error(`[Store] ❌ Failed to resample to ${targetInterval}:`, error);
