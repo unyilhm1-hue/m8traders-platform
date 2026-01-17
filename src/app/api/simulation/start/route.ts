@@ -229,17 +229,6 @@ export async function GET(request: Request) {
                 return tickerMatch && intervalMatch && dateMatch;
             }
 
-            // Pattern 2: TICKER_DATE.json (legacy 1m format)
-            if (requestedInterval === '1m') {
-                const legacyMatch = f.match(/^([A-Z_.]+)_(\d{4}-\d{2}-\d{2})\.json$/);
-                if (legacyMatch) {
-                    const [, fTicker, fDate] = legacyMatch;
-                    const tickerMatch = fTicker === cleanTicker;
-                    const dateMatch = !requestedDate || fDate === requestedDate;
-                    return tickerMatch && dateMatch;
-                }
-            }
-
             return false;
         });
 

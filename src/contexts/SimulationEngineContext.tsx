@@ -5,8 +5,9 @@
  */
 'use client';
 
-import { createContext, useContext, ReactNode } from 'react';
+import { createContext, useContext, ReactNode, useEffect } from 'react';
 import { useSimulationEngine } from '@/hooks/useSimulationEngine';
+import { useSimulationStore } from '@/stores/useSimulationStore';
 
 interface SimulationEngineContextValue {
     engine: ReturnType<typeof useSimulationEngine>;
@@ -26,6 +27,15 @@ export function SimulationEngineProvider({ children }: SimulationEngineProviderP
         autoPlay: false,  // Manual play via controls
         playbackSpeed: 1,
     });
+
+    // 🔥 FIX: Sync Worker Interval when Store Interval changes
+    // This allows the Worker to know about 1m -> 5m switches
+    const baseInterval = useSimulationStore((s) => s.baseInterval);
+    useEffect(() => {
+        if (engine.isReady && baseInterval) {
+            engine.setInterval(baseInterval);
+        }
+    }, [engine.isReady, baseInterval, engine.setInterval]);
 
     const value: SimulationEngineContextValue = {
         engine,

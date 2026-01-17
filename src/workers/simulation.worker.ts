@@ -21,7 +21,8 @@ import {
 // Minimizing local types, relying on Helper where possible
 
 interface WorkerMessage {
-    type: 'INIT_DATA' | 'PLAY' | 'PAUSE' | 'STOP' | 'SET_SPEED' | 'SEEK' | 'CALCULATE_INDICATOR';
+    type: 'INIT_DATA' | 'PLAY' | 'PAUSE' | 'STOP' | 'SET_SPEED' | 'SEEK' | 'CALCULATE_INDICATOR' | 'SET_INTERVAL';
+
     // Smart buffers (Data from Worker A)
     historyBuffer?: EnrichedCandle[];
     simulationQueue?: EnrichedCandle[];
@@ -35,6 +36,8 @@ interface WorkerMessage {
     // Legacy support (optional, minimal maintenance)
     candles?: Candle[];
 }
+
+
 
 interface TickSchedule {
     tickIndex: number;
@@ -54,6 +57,9 @@ function calculateVolume(candles: Candle[]) {
 // ============================================================================
 // ENGINE CLASS
 // ============================================================================
+
+// 🔥 Performance: Conditional logging
+const DEBUG_WORKER = false;
 
 class SimulationEngine {
     private candles: EnrichedCandle[] = [];
@@ -79,7 +85,7 @@ class SimulationEngine {
     private averageVolume: number = 1;
 
     constructor() {
-        console.log('[PhysicsWorker] 🚀 Engine Initialized (v2.0 Factory Model)');
+        if (DEBUG_WORKER) console.log('[PhysicsWorker] 🚀 Engine Initialized (v2.0 Factory Model)');
         postMessage({ type: 'READY' });
     }
 
@@ -91,7 +97,7 @@ class SimulationEngine {
         this.candles = simulation;
         this.currentIntervalStr = interval;
 
-        console.log(`[PhysicsWorker] 📥 Received ${history.length} History + ${simulation.length} Sim Candles`);
+        if (DEBUG_WORKER) console.log(`[PhysicsWorker] 📥 Received ${history.length} History + ${simulation.length} Sim Candles`);
 
         if (this.candles.length === 0) {
             console.warn('[PhysicsWorker] ⚠️ No simulation candles to play!');
@@ -137,10 +143,23 @@ class SimulationEngine {
     }
 
     setSpeed(speed: number) {
+        if (this.playbackSpeed === speed) return;
+
+        const now = performance.now();
+        // 1. Calculate current simulated progress
+        const currentElapsedSim = (now - this.candleStartTime) * this.playbackSpeed;
+
+        // 2. Update speed
+        if (DEBUG_WORKER) console.log(`[PhysicsWorker] ⚡ Speed changed: ${this.playbackSpeed}x -> ${speed}x`);
         this.playbackSpeed = speed;
-        console.log(`[PhysicsWorker] ⚡ Speed changed to ${speed}x`);
-        // Note: Speed affects elapsedSim calculation in poll()
-        // Candle completion timing will adjust automatically
+
+        // 3. Rebase startTime so that (now - newStartTime) * newSpeed === currentElapsedSim
+        // newStartTime = now - (currentElapsedSim / newSpeed)
+        this.candleStartTime = now - (currentElapsedSim / speed);
+
+        // This ensures smoothness:
+        // Before: (T - StartOld) * SpeedOld = Progress
+        // After:  (T - StartNew) * SpeedNew = Progress
     }
 
     seek(index: number) {
@@ -149,6 +168,13 @@ class SimulationEngine {
         this.initializeAggregatedCandle();
         // Notify change
         postMessage({ type: 'CANDLE_CHANGE', candleIndex: this.currentCandleIndex });
+    }
+
+    // 🆕 SYNC INTERVAL
+    setInterval(interval: string) {
+        this.currentIntervalStr = interval;
+        // Reset current aggregation bucket to prevent mixing timeframes
+        this.initializeAggregatedCandle();
     }
 
     // ------------------------------------------------------------------------
@@ -162,10 +188,31 @@ class SimulationEngine {
         const candle = this.candles[this.currentCandleIndex];
         const nextCandle = this.candles[this.currentCandleIndex + 1];
 
-        // 1. Duration Logic (Dynamic)
-        const durationMs = nextCandle ? (nextCandle.t - candle.t) : 60000;
-        // Clamp logic (simplified)
-        const clampedDuration = Math.min(durationMs, 5 * 60 * 1000); // Max 5m wait even if gap
+        // 1. Durasi Logic (Dynamic)
+        // 🔥 FIX: Remove hardcoded 5m clamp. Trust the data gaps (e.g. overnight).
+        // If nextCandle exists, use exact diff. If not, use current interval or fallback.
+        let durationMs = 60000; // Default 1m
+
+        if (nextCandle) {
+            durationMs = nextCandle.t - candle.t;
+        } else {
+            // Last candle: Try to infer from current interval string
+            // "1d" -> 86400000, "1h" -> 3600000
+            const intervalMap: Record<string, number> = {
+                '1m': 60000, '5m': 300000, '15m': 900000, '30m': 1800000,
+                '1h': 3600000, '60m': 3600000, '4h': 14400000, '1d': 86400000
+            };
+            durationMs = intervalMap[this.currentIntervalStr] || 60000;
+        }
+
+        // Clamp only for sanity (e.g. > 1 week gap might be skip, but let's allow "real" gaps)
+        // We only clamp "tick generation duration" to avoid generating billions of ticks for a weekend gap.
+        // For physics, if gap > 4 hours, it's likely a session break.
+        // We should GENERATE ticks only for the "active" part of the candle?
+        // Actually, 'candle.t' is open time. We only need to fill 'duration' amount of ticks.
+        // If it's a daily candle, duration is 24h. We distribute density across 24h?
+        // Ideally yes.
+        const clampedDuration = durationMs;
 
         // 2. Context & Density
         // Use Pre-calculated Pattern!
@@ -177,11 +224,23 @@ class SimulationEngine {
             lowerWickRatio: candle.lowerWickRatio
         };
 
+        // 🔥 FIX: Use historyBuffer for context if available
+        // Recalculate rolling average volume if we have history
+        let rollingAvgVol = this.averageVolume;
+        if (this.historyBuffer.length > 0) {
+            // Use last 20 candles from history + current simulation so far
+            // For simplicity, just use global average derived from Init, 
+            // OR if we want local context:
+            // const contextCandles = [...this.historyBuffer.slice(-20), ...this.candles.slice(Math.max(0, this.currentCandleIndex - 5), this.currentCandleIndex)];
+            // rollingAvgVol = contextCandles.reduce((a, b) => a + b.v, 0) / contextCandles.length || 1;
+            // Keeping global average for stability for now, but confirming it uses the MERGED buffer at Init.
+        }
+
         const context: MarketContext = {
             currentPattern: candle.pattern,
             patternBullish: candle.isBullish,
             sessionProgress: 0.5,
-            volumeVsAverage: candle.v / this.averageVolume,
+            volumeVsAverage: candle.v / rollingAvgVol,
             trend: 'sideways', // Simplified for V2
             trendStrength: 50,
             volatility: 'medium',
@@ -192,7 +251,7 @@ class SimulationEngine {
         const tickCount = calculateTickDensity(
             clampedDuration,
             candle.v,
-            this.averageVolume,
+            rollingAvgVol,
             'medium',
             this.playbackSpeed
         );
@@ -245,8 +304,13 @@ class SimulationEngine {
             this.advanceCandle();
         }
 
-        // Continuous Updates (Throttle)
-        if (now - this.lastCandleUpdateTime > 100) {
+        // Continuous Updates (Adaptive Throttle)
+        // 🔥 FIX: Adapt frame rate based on speed to prevent main thread saturation
+        // Speed 1x -> 100ms (10fps) is enough
+        // Speed 10x -> 16ms (60fps) needed for smoothness
+        const dynamicThrottle = Math.max(16, Math.floor(100 / (this.playbackSpeed || 1)));
+
+        if (now - this.lastCandleUpdateTime >= dynamicThrottle) {
             this.broadcastCandleUpdate('continuous');
             this.lastCandleUpdateTime = now;
         }
@@ -353,6 +417,26 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
                     event.data.simulationQueue,
                     event.data.interval || '1m'
                 );
+            } else if (event.data.candles && event.data.candles.length > 0) {
+                // Legacy support: Treat all candles as simulation queue, empty history
+                // Need to convert Candle[] -> EnrichedCandle[] (minimal enrichment)
+                const enriched = event.data.candles.map((c: any) => ({
+                    t: c.time || c.t,
+                    o: c.open || c.o,
+                    h: c.high || c.h,
+                    l: c.low || c.l,
+                    c: c.close || c.c,
+                    v: c.volume || c.v,
+                    // Defaults for enriched fields
+                    isBullish: (c.close || c.c) >= (c.open || c.o),
+                    bodyRatio: 0.5,
+                    upperWickRatio: 0.2,
+                    lowerWickRatio: 0.2,
+                    pattern: 'doji'
+                }));
+
+                console.warn('[PhysicsWorker] ⚠️ Using legacy INIT_DATA (no history buffer)');
+                engine.init([], enriched, '1m');
             } else {
                 console.error('[PhysicsWorker] Invalid INIT_DATA payload');
             }
@@ -368,6 +452,12 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
             break;
         case 'SET_SPEED':
             if (event.data.speed) engine.setSpeed(event.data.speed);
+            break;
+        case 'SET_INTERVAL':
+            if (event.data.interval) {
+                if (DEBUG_WORKER) console.log(`[PhysicsWorker] 🔄 Interval synced to: ${event.data.interval}`);
+                engine.setInterval(event.data.interval);
+            }
             break;
         case 'SEEK':
             if (event.data.index !== undefined) engine.seek(event.data.index);

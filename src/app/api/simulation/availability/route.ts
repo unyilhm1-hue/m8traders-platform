@@ -63,10 +63,7 @@ export async function GET(request: Request) {
             // Check for new format: TICKER_INTERVAL_DATE.json
             const newFormatFile = `${cleanTicker}_${interval}_${date}.json`;
 
-            // Check for legacy format (only for 1m): TICKER_DATE.json
-            const legacyFile = interval === '1m' ? `${cleanTicker}_${date}.json` : null;
-
-            if (files.includes(newFormatFile) || (legacyFile && files.includes(legacyFile))) {
+            if (files.includes(newFormatFile)) {
                 availableIntervals.push(interval);
             }
         }

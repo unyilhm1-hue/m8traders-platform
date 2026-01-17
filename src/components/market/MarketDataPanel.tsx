@@ -10,19 +10,19 @@ import { Level2OrderBook, TimeAndSales, AdvancedMetricsDisplay } from '@/compone
 import { UI_ICONS } from '@/lib/chart/icons';
 import { formatPrice } from '@/lib/format';
 
-interface MarketDataPanelProps {
-    currentPrice?: number; // Deprecated, using store now
-}
+// interface MarketDataPanelProps {
+//     currentPrice?: number; // Deprecated, using store now
+// }
 
 type MarketDataTab = 'level2' | 'tape' | 'metrics';
 
-export function MarketDataPanel({ currentPrice: deprecatedPrice }: MarketDataPanelProps) {
+export function MarketDataPanel() {
     const { currentCandle, ticker } = useChartStore();
     const [activeTab, setActiveTab] = useState<MarketDataTab>('level2');
     const [isCollapsed, setIsCollapsed] = useState(false);
     const { Prev, Next } = UI_ICONS;
 
-    const displayPrice = currentCandle?.c ?? deprecatedPrice ?? 0;
+    const displayPrice = currentCandle?.c ?? 0;
 
     if (isCollapsed) {
         return (

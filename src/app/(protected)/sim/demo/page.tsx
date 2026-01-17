@@ -234,7 +234,7 @@ function SimDemoPageContent() {
                 <DrawingSidebar />
 
                 {/* Center: Chart Area */}
-                <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+                <div className="flex-1 flex flex-col overflow-hidden min-h-0 min-w-0">
                     <div className="flex-1 min-h-0">
                         <TradingChart />
                     </div>

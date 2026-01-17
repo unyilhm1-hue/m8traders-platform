@@ -255,7 +255,7 @@ function groupByTime(
         // 🔥 FIX: Gap detection - start new bucket if gap > 2x expected interval
         // Prevents aggregating across market gaps (lunch break, overnight)
         if (i > 0) {
-            const prevTime = parseTime(candles[i - 1].time);
+            const prevTime = parseTime(sorted[i - 1].time);
             const gap = (currentTime - prevTime) / 60_000; // Gap in minutes
 
             // If gap > 2x bucket size, assume market closed (lunch/overnight)

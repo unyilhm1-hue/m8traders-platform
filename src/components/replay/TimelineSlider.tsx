@@ -5,6 +5,7 @@
 'use client';
 
 import { useChartStore } from '@/stores';
+import { profiler, KPI_TARGETS } from '@/utils/profiler';
 import { useCallback } from 'react';
 
 export function TimelineSlider() {
@@ -12,14 +13,27 @@ export function TimelineSlider() {
 
     const isReplayActive = replayMode !== 'live';
     const total = replayData.length;
-    const progress = total > 0 ? (replayIndex / (total - 1)) * 100 : 0;
+    // 🔥 FIX: Guard against NaN when total <= 1 (division by zero)
+    const progress = total > 1 ? (replayIndex / (total - 1)) * 100 : 100;
 
     const handleSliderChange = useCallback(
         (e: React.ChangeEvent<HTMLInputElement>) => {
+            // 🔬 PROFILING: Measure seek latency (input → chart update)
+            profiler.start('replay_seek', { total: replayData.length });
+
             const newIndex = parseInt(e.target.value, 10);
             setReplayIndex(newIndex);
+
+            // Note: Chart update happens asynchronously, actual latency measured in TradingChart
+            // This measures the input handling time only
+            const duration = profiler.end('replay_seek');
+
+            // 🔬 KPI CHECK: Warn if seek handling exceeds target
+            if (duration !== null && duration > KPI_TARGETS.REPLAY.SEEK_LATENCY) {
+                console.warn(`[TimelineSlider] ⚠️ Seek exceeded target: ${duration.toFixed(2)}ms > ${KPI_TARGETS.REPLAY.SEEK_LATENCY}ms`);
+            }
         },
-        [setReplayIndex]
+        [setReplayIndex, replayData.length]
     );
 
     const handleSliderMouseDown = useCallback(() => {

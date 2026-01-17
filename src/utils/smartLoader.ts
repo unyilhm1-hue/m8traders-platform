@@ -123,16 +123,28 @@ function parseTimeToTimestamp(timeStr: string | number, dateContext?: string): n
         return timeStr < 10000000000 ? timeStr * 1000 : timeStr;
     }
 
-    // 🔥 FIX: Detect ISO 8601 full timestamp format from MERGED files
-    // Example: "2025-12-19T02:00:00Z" or "2026-01-14T10:30:00.000Z"
-    if (timeStr.includes('T') && (timeStr.includes('Z') || timeStr.includes('+'))) {
+    // 🔥 OPTIMIZED: Strict ISO 8601 detection (fast path)
+    // Supports: "2025-12-19T02:00:00Z" or "2026-01-14T10:30:00.000Z"
+    if (timeStr.length >= 19 && timeStr[10] === 'T') {
         const timestamp = new Date(timeStr).getTime();
         if (!isNaN(timestamp)) {
             return timestamp;
         }
-        console.warn(`[SmartLoader] Invalid ISO timestamp: ${timeStr}`);
     }
 
+    // Legacy support disabled for large datasets
+    if (timeStr.length < 10) {
+        // e.g. "09:00:00"
+        if (dateContext) {
+            return new Date(`${dateContext}T${timeStr}Z`).getTime();
+        }
+    }
+
+    console.warn(`[SmartLoader] Invalid timestamp format: ${timeStr}`);
+    return Date.now();
+
+    // Legacy parsing removed
+    /*
     // Parse legacy time-only string (HH:MM or HH:MM:SS)
     const parts = timeStr.split(':');
     if (parts.length < 2) {
@@ -149,6 +161,7 @@ function parseTimeToTimestamp(timeStr: string | number, dateContext?: string): n
     date.setHours(hours, minutes, seconds, 0);
 
     return date.getTime();
+    */
 }
 
 /**
@@ -238,7 +251,9 @@ async function loadSingleDayCandles(
     interval: IntervalType
 ): Promise<Candle[]> {
     // 🆕 MERGED file pattern (master multi-day file)
-    const mergedFilename = `${ticker}_${interval}_MERGED.json`;
+    // 🔥 FIX: Remove .JK suffix for filename lookup
+    const fileTicker = ticker.replace(/\.JK$/, '');
+    const mergedFilename = `${fileTicker}_${interval}_MERGED.json`;
     const mergedPath = path.join(DATA_DIR, mergedFilename);
 
     try {
@@ -372,7 +387,9 @@ async function loadWarmupBuffer(
     }
 
     // 🔥 NEW APPROACH: Load from MERGED file instead of scanning daily files
-    const mergedFilename = `${ticker}_${interval}_MERGED.json`;
+    // 🔥 FIX: Remove .JK suffix for filename lookup
+    const fileTicker = ticker.replace(/\.JK$/, '');
+    const mergedFilename = `${fileTicker}_${interval}_MERGED.json`;
     const mergedPath = path.join(DATA_DIR, mergedFilename);
 
     try {
@@ -429,7 +446,9 @@ export async function dataExists(
     date: string,
     interval: IntervalType
 ): Promise<boolean> {
-    const mergedFilename = `${ticker}_${interval}_MERGED.json`;
+    // 🔥 FIX: Remove .JK suffix for filename lookup
+    const fileTicker = ticker.replace(/\.JK$/, '');
+    const mergedFilename = `${fileTicker}_${interval}_MERGED.json`;
     const mergedPath = path.join(DATA_DIR, mergedFilename);
 
     try {

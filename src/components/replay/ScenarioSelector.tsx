@@ -59,7 +59,9 @@ export function ScenarioSelector({ className = '' }: ScenarioSelectorProps) {
 
     const handleClearScenario = () => {
         setReplayMode('1y'); // Back to default mode
+        setReplayData([]);   // 🔥 FIX: Clear replay data
         setSelectedScenario(null);
+        // Optionally reset index if store exposes it, but clearing data usually suffices or chart handles it
     };
 
     // Only show if in scenario mode or has scenarios available
@@ -73,8 +75,8 @@ export function ScenarioSelector({ className = '' }: ScenarioSelectorProps) {
             <button
                 onClick={() => setIsOpen(!isOpen)}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${selectedScenario
-                        ? 'bg-[var(--accent-primary)] text-white'
-                        : 'bg-[var(--bg-secondary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] border border-[var(--bg-tertiary)]'
+                    ? 'bg-[var(--accent-primary)] text-white'
+                    : 'bg-[var(--bg-secondary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] border border-[var(--bg-tertiary)]'
                     }`}
                 disabled={loading}
             >
@@ -195,8 +197,8 @@ function ScenarioItem({ scenario, isActive, onClick }: ScenarioItemProps) {
         <button
             onClick={onClick}
             className={`w-full text-left p-3 rounded-lg transition-colors ${isActive
-                    ? 'bg-[var(--accent-primary)]/10 border border-[var(--accent-primary)]'
-                    : 'hover:bg-[var(--bg-tertiary)] border border-transparent'
+                ? 'bg-[var(--accent-primary)]/10 border border-[var(--accent-primary)]'
+                : 'hover:bg-[var(--bg-tertiary)] border border-transparent'
                 }`}
         >
             {/* Name & Ticker */}

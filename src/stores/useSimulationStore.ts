@@ -6,7 +6,7 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { enableMapSet } from 'immer';
-import type { TickData } from '@/hooks/useSimulationWorker';
+import type { TickData } from '@/types/simulation';
 import type { Candle as WorkerCandle } from '@/types';
 import {
     resampleCandles,
@@ -16,6 +16,7 @@ import {
     type IntervalState,
     type Candle as ResamplerCandle
 } from '@/utils/candleResampler';
+import { devLog } from '@/utils/debug'; // Added
 import { getCached, loadWithBuffer, invalidateCache, type CachedData } from '@/utils/smartBuffer';
 
 // 🚀 FIX: Enable MapSet plugin for Immer to support Map in store
@@ -387,6 +388,9 @@ export const useSimulationStore = create<SimulationState>()(
                         const batch = useSimulationStore.getState().tickBatchQueue;
                         if (batch.length === 0) return;
 
+                        // 🔬 PROFILING: Measure batch update duration
+                        const startTime = performance.now();
+
                         // Process ONLY the latest tick (most recent state)
                         const latestTick = batch[batch.length - 1];
 
@@ -441,6 +445,14 @@ export const useSimulationStore = create<SimulationState>()(
                             state.tickBatchQueue = [];
                             state.tickBatchScheduled = false;
                         });
+
+                        // 🔬 PROFILING: End measurement and check KPI
+                        const duration = performance.now() - startTime;
+
+                        // KPI_TARGETS.STORE.TICK_BATCH = 2ms, TICK_BATCH_PEAK = 5ms
+                        if (duration > 2) { // 2ms target
+                            console.warn(`[Store] ⚠️ Tick batch exceeded target: ${duration.toFixed(2)}ms > 2ms (batch size: ${batch.length})`);
+                        }
                     });
                 }
             });
@@ -491,49 +503,16 @@ export const useSimulationStore = create<SimulationState>()(
                 // Sortir paksa di store untuk menjamin urutan
                 converted.sort((a, b) => a.time - b.time);
 
-                // 🔥 FIX D: Safe deduplication with chronological OHLC merge
-                // Group consecutive candles with same timestamp, then merge properly
-                const deduplicated: ChartCandle[] = [];
-                let i = 0;
+                // 🔥 OPTIMIZATION: Worker A already handles sorting & deduplication.
+                // Trust the worker output to be clean.
+                state.candleHistory = converted;
 
-                while (i < converted.length) {
-                    const currentTime = converted[i].time;
-                    const duplicates: ChartCandle[] = [converted[i]];
+                // const originalCount = converted.length;
+                // const removedDuplicates = originalCount - deduplicated.length; 
+                // ... (Removed O(N) dedupe loop) ...
 
-                    // Collect all candles with same timestamp
-                    let j = i + 1;
-                    while (j < converted.length && converted[j].time === currentTime) {
-                        duplicates.push(converted[j]);
-                        j++;
-                    }
-
-                    if (duplicates.length > 1) {
-                        // Merge: first open, max high, min low, last close
-                        const merged: ChartCandle = {
-                            time: currentTime,
-                            open: duplicates[0].open,                              // FIRST open
-                            high: Math.max(...duplicates.map(c => c.high)),        // MAX high
-                            low: Math.min(...duplicates.map(c => c.low)),          // MIN low
-                            close: duplicates[duplicates.length - 1].close,        // LAST close
-                        };
-                        deduplicated.push(merged);
-                    } else {
-                        // No duplicates, add as-is
-                        deduplicated.push(duplicates[0]);
-                    }
-
-                    i = j; // Skip to next unique timestamp
-                }
-
-                const originalCount = converted.length;
-                const removedDuplicates = originalCount - deduplicated.length;
-
-                if (removedDuplicates > 0) {
-                    console.log(`[SimulationStore] 🔧 Removed ${removedDuplicates} duplicate timestamps`);
-                }
-
-                state.candleHistory = deduplicated;
-                console.log(`[SimulationStore] ✅ Converted ${deduplicated.length} candles, first time=${deduplicated[0]?.time}, last time=${deduplicated[deduplicated.length - 1]?.time}`);
+                console.log(`[SimulationStore] ✅ Loaded ${converted.length} history candles (Worker Pre-Optimized)`);
+                console.log(`[SimulationStore] ✅ Converted ${converted.length} candles, first time=${converted[0]?.time}, last time=${converted[converted.length - 1]?.time}`);
             });
         },
 
@@ -543,10 +522,15 @@ export const useSimulationStore = create<SimulationState>()(
                 // We must detect when the WORKER's candle (Source Interval) completes and append it to baseData.
                 // Otherwise, resampling will miss recently simulated data.
 
+                if (!candle || candle.time === undefined || candle.time === null) {
+                    console.warn('[SimulationStore] ⚠️ Rejected update with invalid timestamp', candle);
+                    return;
+                }
+
                 const sourceTime = normalizeTimestamp(candle.time);
                 // Track the "last seen" source candle in a transient way (using the last element of baseData?)
                 const lastBase = state.baseData[state.baseData.length - 1];
-                const lastBaseTime = lastBase ? normalizeTimestamp(lastBase.time) : 0;
+                const lastBaseTime = (lastBase && lastBase.time != null) ? normalizeTimestamp(lastBase.time) : 0;
 
                 // Detect new source candle (using loose comparison for robustness)
                 if (lastBaseTime > 0 && sourceTime > lastBaseTime) {
@@ -588,12 +572,31 @@ export const useSimulationStore = create<SimulationState>()(
                         // Previous candle is complete, add it to history
                         state.candleHistory.push(current);
 
+                        // 🔥 FIX #2: Sync baseData with live candles during replay
+                        // If we are on the SOURCE interval (base mode), capture this candle into baseData.
+                        // This allows resampling to work correctly during live replay.
+                        if (state.baseInterval === state.sourceInterval) {
+                            // Convert ChartCandle -> ResamplerCandle (simple cast as structure implies compatibility)
+                            // Ideally we Normalize, but structure is compatible.
+                            state.baseData.push({
+                                time: current.time * 1000, // Convert back to ms for Resampler
+                                open: current.open,
+                                high: current.high,
+                                low: current.low,
+                                close: current.close,
+                                volume: 0 // TODO: Add volume tracking to ChartCandle if needed
+                            });
+                        }
+
                         // 🔥 OPTIMIZATION: Limit history size to prevent memory issues
                         // Keep last 1000 candles in history (adjust as needed)
                         const MAX_HISTORY = 1000;
                         if (state.candleHistory.length > MAX_HISTORY) {
                             state.candleHistory.shift(); // Remove oldest candle
                         }
+
+                        // Also limit baseData growth if needed, but baseData is the "Source of Truth" for resampling,
+                        // so we should be careful about trimming it unless we implement windowed resampling.
                     }
 
                     // New time bucket detected - start fresh candle
@@ -704,42 +707,12 @@ export const useSimulationStore = create<SimulationState>()(
                     resolve({ historyCount: 0, simCount: 0, error: 'Worker A Crashed' });
                 };
 
-                // 5. Send Job (Revised Protocol)
-                // Serializing raw data to string if it isn't already, for consistency
-                // (Worker A Expects 'rawFileContent' as string or handles parsed? Blueprint said string)
-                // But efficient passing: if 'rawCandles' is object/array, passing it directly is structured clone.
-                // If Blueprint demands string parsing inside worker to avoid main thread freeze, we should pass string.
-                // However, 'loadSimulationDay' typings usually get 'allCandles' as Array from `smartLoader`.
-                // If smartLoader already parsed it, we might just pass JSON.stringify(rawCandles) 
-                // OR we update Worker A to accept Array too (which we did: rawData = JSON.parse(rawFileContent)).
-                // CHECK WORKER A: it parses input. So we should stringify if it's already an object, 
-                // OR better, checking Worker A: it accepts `rawFileContent`.
-
-                // PERFORMANCE NOTE: structuredClone of huge array is also heavy.
-                // If `rawCandles` came from network/file as string, we should have passed string.
-                // But here `rawCandles` is `WorkerCandle[]` (already parsed).
-                // Re-stringifying is wasteful.
-                // Worker A logic refactor: "let rawData; try { rawData = JSON.parse(rawFileContent) ... "
-                // I will adjust the payload here to pass the array as-is? 
-                // Wait, Blueprint said "Main Thread menyimpan data bersih" - no, Blueprint says "Worker melakukan JSON.parse".
-                // This implies input is String. 
-                // But `loadSimulationDay` signature is `(date: string, allCandles: WorkerCandle[])`.
-                // This means parsing happened UPSTREAM (in smartLoader). 
-                // If so, Main Thread ALREADY paid the parsing cost.
-                // Refactoring smartLoader to pass raw string is out of scope unless directed?
-                // The Blueprint says "Worker ini menunggu rawFileContent: String JSON mentah".
-                // I will serialize it here to match the interface, 
-                // BUT: ideally `smartLoader` should return the string.
-                // For now, I'll pass it as string to satisfy the Worker's expectation 
-                // (even if double parsing happens, strict alignment with Blueprint 1st priority).
-
-                const rawString = JSON.stringify(rawCandles); // ⚠️ Overhead here
-
-                // Ideally we optimize this later.
+                // 🔥 OPTIMIZATION: Pass object directly (Structured Clone)
+                // Avoids JSON.stringify on Main Thread + JSON.parse on Worker
 
                 loaderWorker.postMessage({
                     type: 'PROCESS_DATA',
-                    rawFileContent: rawString,
+                    rawFileContent: rawCandles, // Pass as Array/Object
                     params: {
                         targetDate: dateStr,
                         config: marketConfig
@@ -817,7 +790,7 @@ export const useSimulationStore = create<SimulationState>()(
             // Check if already cached
             const cached: ResamplerCandle[] | undefined = state.cachedIntervals.get(targetInterval);
             if (cached) {
-                console.log(`[Store] ✅ Using cached ${targetInterval} data (${cached.length} candles)`);
+                devLog('RESAMPLING', `[Store] ✅ Using cached ${targetInterval} data (${cached.length} candles)`);
 
                 // 🔥 FIX #2: Filter partial candles from cache
                 const completeCandles = cached.filter((c: ResamplerCandle) => {
@@ -826,13 +799,13 @@ export const useSimulationStore = create<SimulationState>()(
                 });
 
                 if (completeCandles.length < cached.length) {
-                    console.log(`[Store] 📦 Filtered ${cached.length - completeCandles.length} partial candles from cache`);
+                    devLog('RESAMPLING', `[Store] 📦 Filtered ${cached.length - completeCandles.length} partial candles from cache`);
                 }
 
                 // 🚀 FIX 2: Sync state, chart, and worker
                 set((state) => {
-                    console.log(`[Store→switchInterval] 🔄 Using CACHED data for ${targetInterval}`);
-                    console.log(`[Store→switchInterval] 📊 Before: baseInterval=${state.baseInterval}, currentCandle=`, state.currentCandle);
+                    devLog('RESAMPLING', `[Store→switchInterval] 🔄 Using CACHED data for ${targetInterval}`);
+                    devLog('RESAMPLING', `[Store→switchInterval] 📊 Before: baseInterval=${state.baseInterval}, currentCandle=`, state.currentCandle);
 
                     const previousInterval = state.baseInterval;
                     state.baseInterval = targetInterval;
@@ -841,7 +814,8 @@ export const useSimulationStore = create<SimulationState>()(
                     // 🔥 FIX: Don't divide if time is already in seconds (< 10 billion)
                     state.candleHistory = completeCandles.map((c: ResamplerCandle) => {
                         const timeInMs = typeof c.time === 'number' ? c.time : new Date(c.time).getTime();
-                        const timeInSeconds = timeInMs > 10_000_000_000 ? timeInMs / 1000 : timeInMs;
+                        // Force to seconds (Unix timestamp)
+                        const timeInSeconds = timeInMs > 10_000_000_000 ? Math.floor(timeInMs / 1000) : Math.floor(timeInMs);
 
                         return {
                             time: timeInSeconds,
@@ -852,33 +826,34 @@ export const useSimulationStore = create<SimulationState>()(
                         };
                     });
 
-                    console.log(`[Store→switchInterval] 📊 After: baseInterval=${state.baseInterval}, candleHistory.length=${state.candleHistory.length}`);
-                    console.log(`[Store→switchInterval] 🎯 currentCandle preserved:`, state.currentCandle);
-
-                    // 🔥 CRITICAL FIX: Force immediate currentCandle refresh after interval switch
-                    // This ensures chart immediately picks up the aggregated candle for new interval
+                    // 🔥 FIX #3: Realign currentCandle to new interval bucket
                     if (state.currentCandle) {
-                        const current = state.currentCandle;
-                        // Create new reference to trigger Zustand subscription
-                        state.currentCandle = {
-                            time: current.time,
-                            open: current.open,
-                            high: current.high,
-                            low: current.low,
-                            close: current.close
-                        };
-                        console.log(`[Store→switchInterval] 🔔 Forced currentCandle refresh to trigger chart update`);
-                    }
-                });
+                        const intervalMinutes = intervalToMinutes(targetInterval);
+                        const intervalSeconds = intervalMinutes * 60;
+                        const newSnappedTime = Math.floor(state.currentCandle.time / intervalSeconds) * intervalSeconds;
 
-                console.log(`[Store] 📊 Chart updated with ${completeCandles.length} ${targetInterval} candles`);
-                return completeCandles;
+                        // Update time to match new interval grid
+                        state.currentCandle.time = newSnappedTime;
+                    }
+
+                    devLog('RESAMPLING', `[Store→switchInterval] 🔔 Re-aligned currentCandle to ${targetInterval} grid`);
+                }); // End set()
+
+                devLog('RESAMPLING', `[Store] 📊 Chart updated with ${completeCandles.length} ${targetInterval} candles`);
+                return completeCandles.map((c: any) => ({
+                    time: typeof c.time === 'number' && c.time > 10000000000 ? c.time / 1000 : c.time,
+                    open: c.open,
+                    high: c.high,
+                    low: c.low,
+                    close: c.close,
+                    volume: c.volume || 0
+                })); // Return formatted candles (though component usually uses store directly)
             }
 
             // 🔥 FIX: Resample from SOURCE interval, not current baseInterval
             // This prevents "incompatible interval" errors when switching 1m→5m→1m
             try {
-                console.log(`[Store] 🔄 Resampling: ${state.sourceInterval} (source) → ${targetInterval}`);
+                devLog('RESAMPLING', `[Store] 🔄 Resampling: ${state.sourceInterval} (source) → ${targetInterval}`);
 
                 const resampled = resampleCandles(
                     state.baseData,
@@ -901,12 +876,16 @@ export const useSimulationStore = create<SimulationState>()(
                     const partialCandles = resampled.filter(c => c.metadata?.isPartial);
 
                     if (partialCandles.length > 0) {
-                        console.log(`[Store] 🧊 Restoring active candle from partial switch data`);
+                        devLog('RESAMPLING', `[Store] 🧊 Restoring active candle from partial switch data`);
                         // Set the partial bucket as the CURRENT active candle
                         // This ensures visual continuity (open/high/low preserved)
                         const partial = partialCandles[0];
+                        // 🔥 FIX: Normalize timestamp to seconds to match Chart & Update Logic
+                        const partialTime = typeof partial.time === 'number' ? partial.time : new Date(partial.time).getTime();
+                        const timeInSeconds = partialTime > 10_000_000_000 ? partialTime / 1000 : partialTime;
+
                         state.currentCandle = {
-                            time: typeof partial.time === 'number' ? partial.time : new Date(partial.time).getTime() / 1000,
+                            time: Math.floor(timeInSeconds),
                             open: partial.open,
                             high: partial.high,
                             low: partial.low,
@@ -919,7 +898,7 @@ export const useSimulationStore = create<SimulationState>()(
                             const lastComplete = completeCandles[completeCandles.length - 1];
                             const lastTime = typeof lastComplete.time === 'number' ? lastComplete.time : new Date(lastComplete.time).getTime() / 1000;
 
-                            console.log(`[Store] 🌱 Seeding currentCandle from last complete bar`);
+                            devLog('RESAMPLING', `[Store] 🌱 Seeding currentCandle from last complete bar`);
                             state.currentCandle = {
                                 time: lastTime + (intervalToMinutes(targetInterval) * 60), // Next bar time
                                 open: lastComplete.close, // Next bar opens at last close
@@ -947,8 +926,8 @@ export const useSimulationStore = create<SimulationState>()(
                     });
                 });
 
-                console.log(`[Store] ✅ Resampled ${state.sourceInterval} → ${targetInterval} (${resampled.length} candles)`);
-                console.log(`[Store] 📊 Chart updated with resampled data`);
+                devLog('RESAMPLING', `[Store] ✅ Resampled ${state.sourceInterval} → ${targetInterval} (${resampled.length} candles)`);
+                devLog('RESAMPLING', `[Store] 📊 Chart updated with resampled data`);
                 return resampled;
             } catch (error) {
                 console.error(`[Store] ❌ Failed to resample to ${targetInterval}:`, error);

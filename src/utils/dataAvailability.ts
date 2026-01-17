@@ -186,14 +186,23 @@ export async function getAvailableIntervals(
     date: string
 ): Promise<IntervalType[]> {
     const index = await scanDataDirectory();
-    const tickerData = index[ticker];
+    let tickerData = index[ticker];
 
     console.log(`[DataAvailability] getAvailableIntervals for ${ticker} on ${date}`);
     console.log(`[DataAvailability] tickerData exists:`, !!tickerData);
 
     if (!tickerData) {
-        console.warn(`[DataAvailability] No index found for ticker: ${ticker}`);
-        return [];
+        // 🔥 FIX: Retry with normalized ticker (remove .JK suffix)
+        if (ticker.endsWith('.JK')) {
+            const normalizedTicker = ticker.replace(/\.JK$/, '');
+            console.log(`[DataAvailability] Ticker ${ticker} not found, trying ${normalizedTicker}`);
+            tickerData = index[normalizedTicker];
+        }
+
+        if (!tickerData) {
+            console.warn(`[DataAvailability] No index found for ticker: ${ticker}`);
+            return [];
+        }
     }
 
     console.log(`[DataAvailability] Available intervals for ${ticker}:`, tickerData.intervals.map(i => i.interval));

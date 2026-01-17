@@ -10,13 +10,17 @@ import { useMemo } from 'react';
 import type { Interval } from '@/utils/candleResampler';
 
 export function IntervalButtons() {
-    const store = useSimulationStore();
-    const currentInterval = store.baseInterval || '1m';
+    // 🔥 PERFORMANCE FIX: Use specific selectors instead of entire store
+    // This prevents re-renders from irrelevant state changes (tick/trade/orderbook)
+    const currentInterval = useSimulationStore((state) => state.baseInterval || '1m');
+    const baseData = useSimulationStore((state) => state.baseData);
+    const getIntervalStates = useSimulationStore((state) => state.getIntervalStates);
+    const switchInterval = useSimulationStore((state) => state.switchInterval);
 
     // Get dynamic interval states from Master Blueprint
     const intervalStates = useMemo(() => {
-        if (typeof store.getIntervalStates === 'function') {
-            return store.getIntervalStates();
+        if (typeof getIntervalStates === 'function') {
+            return getIntervalStates();
         }
         // Fallback: all intervals enabled if Blueprint not loaded
         return (['1m', '2m', '5m', '15m', '30m', '60m'] as Interval[]).map(interval => ({
@@ -24,12 +28,12 @@ export function IntervalButtons() {
             enabled: true,
             reason: undefined
         }));
-    }, [store, store.baseData, store.baseInterval]);
+    }, [getIntervalStates, baseData, currentInterval]);
 
     const handleIntervalClick = (interval: Interval) => {
-        if (typeof store.switchInterval === 'function') {
+        if (typeof switchInterval === 'function') {
             try {
-                store.switchInterval(interval);
+                switchInterval(interval);
             } catch (error) {
                 console.error('[IntervalButtons] Switch failed:', error);
             }

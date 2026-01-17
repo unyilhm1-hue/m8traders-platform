@@ -78,13 +78,12 @@ export interface Drawing {
 }
 
 export type DrawingType =
-    | 'line'
-    | 'horizontal'
-    | 'vertical'
-    | 'ray'
-    | 'fibonacci'
-    | 'rectangle'
-    | 'riskReward';
+    | 'straightLine'
+    | 'horizontalStraightLine'
+    | 'verticalStraightLine'
+    | 'horizontalRayLine'
+    | 'fibonacciLine'
+    | 'rect';
 
 export interface DrawingPoint {
     price: number;
@@ -97,45 +96,13 @@ export interface DrawingStyle {
     lineStyle: 'solid' | 'dashed' | 'dotted';
 }
 
-// Overlay types (KLineChart built-in drawing tools)
-export type OverlayType =
-    // Line Tools
-    | 'horizontalRayLine'
-    | 'horizontalSegment'
-    | 'horizontalStraightLine'
-    | 'verticalRayLine'
-    | 'verticalSegment'
-    | 'verticalStraightLine'
-    | 'rayLine'
-    | 'segment'
-    | 'straightLine'
-    // Price Tools
-    | 'priceLine'
-    | 'priceChannelLine'
-    // Advanced Tools
-    | 'parallelStraightLine'
-    | 'fibonacciLine'
-    | 'fibonacciCircle'
-    | 'fibonacciSegment'
-    | 'fibonacciSpiral'
-    | 'fibonacciSpeedResistanceFan'
-    | 'fibonacciExtension'
-    | 'gannBox'
-    | 'gannSquare'
-    | 'gannFan'
-    // Geometric Shapes
-    | 'circle'
-    | 'rect'
-    | 'triangle'
-    | 'parallelogram'
-    // Waves & Patterns
-    | 'threeWaves'
-    | 'fiveWaves'
-    | 'xabcd'
-    | 'headAndShoulders'
-    // Annotations
-    | 'simpleAnnotation'
-    | 'simpleTag';
+// Unified Drawing/Overlay types
+export type OverlayType = DrawingType;
+
+// export type OverlayType =
+//     // Line Tools
+//     | 'horizontalRayLine'
+// ... (Legacy KLineChart types removed)
 
 export interface OverlayPoint {
     timestamp: number;

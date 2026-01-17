@@ -19,17 +19,17 @@ interface MarketConfig {
 
 interface WorkerInput {
     type: 'PROCESS_DATA';
-    rawFileContent: string;  // Raw JSON string
-    fileMetadata?: {         // Optional upload metadata
+    rawFileContent: string | any;  // 🔥 OPTIMIZATION: Accept string OR raw object
+    fileMetadata?: {
         name: string;
         size: number;
         type: string;
     };
-    marketRules?: {          // Default rules (e.g. IDX)
+    marketRules?: {
         defaultLotSize: number;
     };
-    params: {                // Context params
-        targetDate: string;  // YYYY-MM-DD
+    params: {
+        targetDate: string;
         config: MarketConfig;
     };
 }
@@ -110,7 +110,12 @@ self.onmessage = (event: MessageEvent<WorkerInput>) => {
         // ---------------------------------------------------------
         let rawData: any;
         try {
-            rawData = JSON.parse(rawFileContent);
+            if (typeof rawFileContent === 'string') {
+                rawData = JSON.parse(rawFileContent);
+            } else {
+                // 🔥 OPTIMIZATION: Zero-copy transfer (if passed as object)
+                rawData = rawFileContent;
+            }
         } catch (e) {
             throw new Error('Format file tidak valid (Gagal Parsing JSON)');
         }

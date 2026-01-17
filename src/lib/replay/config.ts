@@ -37,16 +37,18 @@ export const REPLAY_MODE = {
  * Mode labels for UI display
  */
 export const REPLAY_MODE_LABELS: Record<ReplayMode, string> = {
-    live: 'Live Trading',
-    '1y': '1 Year Replay',
+    'live': 'Live Market',
+    '1y': '1 Year History',
+    'scenario': 'Scenario' // 🔥 FIX: Added Missing Label
 };
 
 /**
  * Mode descriptions for tooltips
  */
 export const REPLAY_MODE_DESCRIPTIONS: Record<ReplayMode, string> = {
-    live: 'Real-time market data',
-    '1y': 'Replay 1 year of historical daily data for practice',
+    'live': 'Connect to Real-time Exchange Data',
+    '1y': 'Replay the last 1 year of market data',
+    'scenario': 'Practice with frozen historical scenarios' // 🔥 FIX: Added Missing Description
 };
 
 /**

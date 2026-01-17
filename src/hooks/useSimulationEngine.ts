@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useSimulationStore } from '@/stores/useSimulationStore';
-import type { TickData } from './useSimulationWorker';
+import type { TickData } from '@/types/simulation';
 
 interface SimulationEngineOptions {
     autoLoad?: boolean;
@@ -249,6 +249,17 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
         }
     }, []);
 
+    // 🔥 NEW: Sync Interval Method
+    const setInterval = useCallback((interval: string) => {
+        if (workerRef.current) {
+            console.log(`[useSimulationEngine] 🔄 Syncing worker interval to ${interval}`);
+            workerRef.current.postMessage({
+                type: 'SET_INTERVAL',
+                interval,
+            });
+        }
+    }, []);
+
     return {
         play,
         pause,
@@ -258,6 +269,7 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
         reload,
         initWithData,      // Legacy method
         initWithBuffers,   // 🔥 NEW: Smart buffering method
+        setInterval,       // 🆕 Exposed method
         isReady,
     };
 }

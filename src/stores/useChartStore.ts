@@ -56,7 +56,7 @@ interface ChartState {
     // Replay actions
     setReplayMode: (mode: ReplayMode) => void;
     setReplayIndex: (index: number) => void;
-    setReplayData: (data: Candle[]) => void;
+    setReplayData: (data: Candle[], timeframe?: Timeframe) => void;
     incrementReplayIndex: () => void;
     resetReplay: () => void;
     reset: () => void;
@@ -280,13 +280,13 @@ export const useChartStore = create<ChartState>()(
                     state.replayIndex = Math.max(0, Math.min(index, maxIndex));
                 }),
 
-            setReplayData: (data) =>
+            setReplayData: (data, timeframe: Timeframe = '1m') =>
                 set((state) => {
                     state.replayData = data;
                     // Start from second day to show historical context
                     state.replayIndex = findSecondDayIndex(data);
-                    // Auto-set timeframe to 1m for replay
-                    state.timeframe = '1m';
+                    // 🔥 FIX: Use provided timeframe, default to 1m only if not specified
+                    state.timeframe = timeframe;
                     if (data.length > 0) {
                         state.replayStartTime = data[0].t;
                         state.replayEndTime = data[data.length - 1].t;
@@ -304,6 +304,8 @@ export const useChartStore = create<ChartState>()(
                 set((state) => {
                     state.replayIndex = 0;
                     state.isPlaying = false;
+                    state.replayStartTime = null; // 🔥 FIX: Clear metadata
+                    state.replayEndTime = null;   // 🔥 FIX: Clear metadata
                 }),
 
             // NEW: Set random IDX ticker (called on login)

@@ -36,7 +36,10 @@ export function useMasterBlueprint(ticker: string) {
         availableIntervals: []
     });
 
-    const store = useSimulationStore();
+    // 🔥 PERFORMANCE FIX: Use specific selectors instead of entire store
+    const loadWithSmartBuffer = useSimulationStore((state) => state.loadWithSmartBuffer);
+    const getIntervalStates = useSimulationStore((state) => state.getIntervalStates);
+    const switchIntervalFn = useSimulationStore((state) => state.switchInterval);
 
     // ========================================================================
     // MODUL 1+2: Smart Buffer + Resampling Integration
@@ -47,10 +50,10 @@ export function useMasterBlueprint(ticker: string) {
 
         try {
             // Load with smart buffer (200 candles historical for indicators)
-            await store.loadWithSmartBuffer(ticker, startDate, interval);
+            await loadWithSmartBuffer(ticker, startDate, interval);
 
             // Get available intervals based on loaded data
-            const intervals = store.getIntervalStates();
+            const intervals = getIntervalStates();
 
             setState({
                 isLoading: false,
@@ -66,15 +69,15 @@ export function useMasterBlueprint(ticker: string) {
             setState(prev => ({ ...prev, isLoading: false, error: errorMsg }));
             console.error('[Integration] ❌ Load failed:', errorMsg);
         }
-    }, [ticker, store]);
+    }, [ticker, loadWithSmartBuffer, getIntervalStates]);
 
     const switchInterval = useCallback((targetInterval: Interval) => {
         try {
             // Client-side resampling - zero API calls!
-            const resampledData = store.switchInterval(targetInterval);
+            const resampledData = switchIntervalFn(targetInterval);
 
             // Update available intervals (some may become unavailable)
-            const intervals = store.getIntervalStates();
+            const intervals = getIntervalStates();
 
             setState(prev => ({
                 ...prev,
@@ -90,7 +93,7 @@ export function useMasterBlueprint(ticker: string) {
             console.error('[Integration] ❌ Switch failed:', errorMsg);
             return [];
         }
-    }, [store]);
+    }, [switchIntervalFn, getIntervalStates]);
 
     // ========================================================================
     // MODUL 3: Worker Performance Optimization
@@ -140,9 +143,6 @@ export function useMasterBlueprint(ticker: string) {
         loadSimulation,
         switchInterval,
         analyzeTrading,
-
-        // Store access (for advanced use)
-        store
     };
 }
 

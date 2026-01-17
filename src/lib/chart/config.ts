@@ -182,15 +182,9 @@ export const DRAWING_TOOLS: Record<
         icon: '→',
         description: 'Horizontal ray line',
         category: 'line',
-        totalStep: 1,
+        totalStep: 2, // Needs 2 points now
     },
-    horizontalSegment: {
-        name: 'H Segment',
-        icon: '⟷',
-        description: 'Horizontal line segment',
-        category: 'line',
-        totalStep: 2,
-    },
+    // horizontalSegment: { ... },
     horizontalStraightLine: {
         name: 'H Line',
         icon: '━',
@@ -200,20 +194,8 @@ export const DRAWING_TOOLS: Record<
     },
 
     // Vertical Lines
-    verticalRayLine: {
-        name: 'V Ray',
-        icon: '↓',
-        description: 'Vertical ray line',
-        category: 'line',
-        totalStep: 1,
-    },
-    verticalSegment: {
-        name: 'V Segment',
-        icon: '↕',
-        description: 'Vertical line segment',
-        category: 'line',
-        totalStep: 2,
-    },
+    // verticalRayLine: { ... },
+    // verticalSegment: { ... },
     verticalStraightLine: {
         name: 'V Line',
         icon: '┃',
@@ -223,52 +205,24 @@ export const DRAWING_TOOLS: Record<
     },
 
     // Trend Lines
-    rayLine: {
-        name: 'Ray',
-        icon: '📈',
-        description: 'Trend ray line',
-        category: 'line',
-        totalStep: 2,
-    },
-    segment: {
-        name: 'Segment',
-        icon: '/',
-        description: 'Trend line segment',
-        category: 'line',
-        totalStep: 2,
-    },
+    // rayLine: { ... },
+    // segment: { ... },
     straightLine: {
         name: 'Trendline',
-        icon: '📊',
+        icon: '📊', // Updated icon
         description: 'Trend infinite line',
         category: 'line',
         totalStep: 2,
     },
 
     // Price Tools
-    priceLine: {
-        name: 'Price Line',
-        icon: '💲',
-        description: 'Price level line with label',
-        category: 'price',
-        totalStep: 1,
-    },
-    priceChannelLine: {
-        name: 'Channel',
-        icon: '📐',
-        description: 'Price channel (parallel lines)',
-        category: 'price',
-        totalStep: 3,
-    },
+    /*
+    priceLine: { ... },
+    priceChannelLine: { ... },
+    */
 
     // Advanced Tools
-    parallelStraightLine: {
-        name: 'Parallel',
-        icon: '⫴',
-        description: 'Parallel straight lines',
-        category: 'advanced',
-        totalStep: 3,
-    },
+    // parallelStraightLine: { ... },
     fibonacciLine: {
         name: 'Fib Retracement',
         icon: '🔢',
@@ -276,137 +230,19 @@ export const DRAWING_TOOLS: Record<
         category: 'advanced',
         totalStep: 2,
     },
-    fibonacciCircle: {
-        name: 'Fib Circle',
-        icon: '⭕',
-        description: 'Fibonacci Circles',
-        category: 'advanced',
-        totalStep: 2,
-    },
-    fibonacciSegment: {
-        name: 'Fib Segment',
-        icon: 'F',
-        description: 'Fibonacci Segment',
-        category: 'advanced',
-        totalStep: 2,
-    },
-    fibonacciSpiral: {
-        name: 'Fib Spiral',
-        icon: '꩜',
-        description: 'Fibonacci Spiral',
-        category: 'advanced',
-        totalStep: 2,
-    },
-    fibonacciSpeedResistanceFan: {
-        name: 'Fib Fan',
-        icon: 'F',
-        description: 'Fibonacci Speed Resistance Fan',
-        category: 'advanced',
-        totalStep: 2,
-    },
-    fibonacciExtension: {
-        name: 'Fib Extension',
-        icon: 'F',
-        description: 'Fibonacci Extension',
-        category: 'advanced',
-        totalStep: 3,
-    },
-    gannBox: {
-        name: 'Gann Box',
-        icon: 'G',
-        description: 'Gann Box',
-        category: 'advanced',
-        totalStep: 2,
-    },
-    gannSquare: {
-        name: 'Gann Square',
-        icon: 'G',
-        description: 'Gann Square',
-        category: 'advanced',
-        totalStep: 2,
-    },
-    gannFan: {
-        name: 'Gann Fan',
-        icon: 'G',
-        description: 'Gann Fan',
-        category: 'advanced',
-        totalStep: 2,
-    },
+    /*
+    fibonacciCircle: { ... },
+    ...
+    */
 
     // Geometric Shapes
-    circle: {
-        name: 'Circle',
-        icon: '⚪',
-        description: 'Circle shape',
-        category: 'annotation',
-        totalStep: 2,
-    },
+    // circle: { ... },
     rect: {
         name: 'Rectangle',
         icon: '⬜',
         description: 'Rectangle shape',
         category: 'annotation',
         totalStep: 2,
-    },
-    triangle: {
-        name: 'Triangle',
-        icon: '🔺',
-        description: 'Triangle shape',
-        category: 'annotation',
-        totalStep: 3,
-    },
-    parallelogram: {
-        name: 'Parallelogram',
-        icon: '▱',
-        description: 'Parallelogram shape',
-        category: 'annotation',
-        totalStep: 3,
-    },
-
-    // Waves & Patterns
-    threeWaves: {
-        name: 'Elliott 3',
-        icon: '3',
-        description: 'Elliott Wave (3 points)',
-        category: 'advanced',
-        totalStep: 3,
-    },
-    fiveWaves: {
-        name: 'Elliott 5',
-        icon: '5',
-        description: 'Elliott Wave (5 points)',
-        category: 'advanced',
-        totalStep: 5,
-    },
-    xabcd: {
-        name: 'XABCD',
-        icon: 'X',
-        description: 'XABCD Pattern',
-        category: 'advanced',
-        totalStep: 5,
-    },
-    headAndShoulders: {
-        name: 'Head & Shoulders',
-        icon: 'H',
-        description: 'Head and Shoulders Pattern',
-        category: 'advanced',
-        totalStep: 5, // Check steps
-    },
-
-    // Annotations
-    simpleAnnotation: {
-        name: 'Note',
-        icon: '📝',
-        description: 'Text annotation',
-        category: 'annotation',
-        totalStep: 1,
-    },
-    simpleTag: {
-        name: 'Tag',
-        icon: '🏷️',
-        description: 'Tag marker',
-        category: 'annotation',
-        totalStep: 1,
     },
 } as const;
 

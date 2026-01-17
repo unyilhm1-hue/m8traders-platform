@@ -149,25 +149,11 @@ export function parseFilename(filename: string): FileMetadata | null {
         };
     }
 
-    // Try legacy format: TICKER_INTERVAL_DATE.json
-    // 🔥 FIX #17: Support ticker with dots
-    const legacyMatch = filename.match(/^([A-Z]+(?:\.[A-Z]+)?)_(\d+[mhd])_(\d{4}-\d{2}-\d{2})\.json$/);
-    if (legacyMatch) {
-        const [, ticker, interval, date] = legacyMatch;
+    // Legacy support deprecated for performance
+    // const legacyMatch = filename.match(/^([A-Z]+(?:\.[A-Z]+)?)_(\d+[mhd])_(\d{4}-\d{2}-\d{2})\.json$/);
 
-        if (!INTERVALS.includes(interval as IntervalType)) {
-            console.warn(`[Intervals] Unknown interval: ${interval}`);
-            return null;
-        }
-
-        return {
-            ticker,
-            interval: interval as IntervalType,
-            date,
-            filename,
-            isMergedFile: false
-        };
-    }
+    // Unrecognized format
+    return null;
 
     // Unrecognized format
     return null;
