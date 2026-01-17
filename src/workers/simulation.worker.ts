@@ -1194,11 +1194,8 @@ class SimulationEngine {
 
             // Adaptive throttle with catch-up
             if (ticksFiredThisPoll >= maxTicksThisPoll) {
-                // 🆕 FIX 3: Track dropped ticks
-                const remainingTicks = this.tickSchedule.length - this.currentTickIndex;
-                if (remainingTicks > 0 && !wasThrottled) {
-                    this.droppedTickCount += (remainingTicks - ticksFiredThisPoll);
-                }
+                // 🔥 FIX #9: Don't increment droppedTickCount here
+                // Ticks are throttled (delayed), not dropped - they'll fire in next poll
 
                 if (wasThrottled) {
                     console.log(`[SimWorker] 🚀 Catch-up mode: processed ${ticksFiredThisPoll} ticks, ${this.tickBacklog} remaining`);
