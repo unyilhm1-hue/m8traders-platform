@@ -42,26 +42,81 @@ function SimDemoPageContent() {
     // ✅ Track initialization to prevent loop
     const hasInitialized = useRef(false);
 
-    // 🔥 NEW: Dynamic ticker state (replaces hardcoded 'ADRO')
-    const [selectedTicker, setSelectedTicker] = useState('ADRO');  // Default to ADRO for backward compatibility
+    // 🔥 DYNAMIC: Auto-detect available ticker and date from data
+    const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
+    const [targetDate, setTargetDate] = useState<string | null>(null);
+    const [availableIntervals, setAvailableIntervals] = useState<string[]>(['1m']);
 
     // ✅ Subscribe to real-time price from simulation store
     const currentPrice = useCurrentPrice();
 
+    // 🚀 AUTO-DETECT AVAILABLE TICKER & DATE FROM DATA
+    useEffect(() => {
+        const detectAvailableData = async () => {
+            try {
+                console.log('[SimDemoPage] Fetching available tickers...');
+
+                const response = await fetch('/api/simulation/tickers');
+                const result = await response.json();
+
+                if (!result.success || !result.data?.tickers?.length) {
+                    console.error('[SimDemoPage] No tickers available');
+                    return;
+                }
+
+                // Select first available ticker
+                const firstTicker = result.data.tickers[0];
+                console.log('[SimDemoPage] Auto-selected ticker:', firstTicker.ticker);
+
+                setSelectedTicker(firstTicker.ticker);
+                setAvailableIntervals(firstTicker.intervals || ['1m']);
+
+                // Extract latest available date from metadata
+                if (firstTicker.metadata?.data_end) {
+                    // Parse ISO date string and get day before (to ensure full day data)
+                    const endDate = new Date(firstTicker.metadata.data_end);
+                    endDate.setDate(endDate.getDate() - 1); // Use previous day for complete data
+
+                    const latestDate = endDate.toISOString().split('T')[0]; // Format: YYYY-MM-DD
+                    console.log('[SimDemoPage] Auto-selected date:', latestDate);
+
+                    setTargetDate(latestDate);
+                } else {
+                    // Fallback to safe date
+                    setTargetDate('2026-01-14');
+                }
+
+            } catch (err) {
+                console.error('[SimDemoPage] Error detecting available data:', err);
+                // Fallback to defaults
+                setSelectedTicker('ADRO');
+                setTargetDate('2026-01-14');
+            }
+        };
+
+        detectAvailableData();
+    }, []); // Run once on mount
+
     // 🚀 AUTO-LOAD DATA ON PAGE MOUNT WITH SMART BUFFERING
     useEffect(() => {
+        // Wait until ticker and date are detected
+        if (!selectedTicker || !targetDate) {
+            console.log('[SimDemoPage] Waiting for ticker/date detection...');
+            return;
+        }
+
         const initSimulation = async () => {
             try {
                 // 🔥 NEW: Use smart buffering API
                 console.log('[SimDemoPage] Fetching simulation data with smart buffering...');
 
-                // 🔥 UPDATED: Use dynamic selectedTicker instead of hardcoded 'ADRO'
+                // 🔥 DYNAMIC: Use auto-detected values
                 const ticker = selectedTicker;
-                const targetDate = '2026-01-14';  // ✅ Full day data available (2026-01-15 only until 09:14)
-                const interval = '1m';             // TODO: Support interval switching
+                const date = targetDate;
+                const interval = '1m';  // TODO: Support interval switching from availableIntervals
 
                 const response = await fetch(
-                    `/api/simulation/load?ticker=${ticker}&date=${targetDate}&interval=${interval}`
+                    `/api/simulation/load?ticker=${ticker}&date=${date}&interval=${interval}`
                 );
 
                 const result = await response.json();
@@ -144,7 +199,7 @@ function SimDemoPageContent() {
                 hasInitialized.current = true;
             }, 100);
         }
-    }, [isReady, engine, selectedTicker]); // 🔥 UPDATED: Added selectedTicker dependency to reload when ticker changes
+    }, [isReady, engine, selectedTicker, targetDate]); // 🔥 UPDATED: Added targetDate dependency
 
     // ✅ FIX: Event-driven auto-play (no race condition)
     // Trigger play ONLY after DATA_READY confirmed
