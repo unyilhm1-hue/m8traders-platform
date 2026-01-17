@@ -758,13 +758,23 @@ export const useSimulationStore = create<SimulationState>()(
             if (cached) {
                 console.log(`[Store] ✅ Using cached ${targetInterval} data (${cached.length} candles)`);
 
+                // 🔥 FIX #2: Filter partial candles from cache
+                const completeCandles = cached.filter((c: ResamplerCandle) => {
+                    const metadata = (c as any).metadata;
+                    return !metadata || !metadata.isPartial;
+                });
+
+                if (completeCandles.length < cached.length) {
+                    console.log(`[Store] 📦 Filtered ${cached.length - completeCandles.length} partial candles from cache`);
+                }
+
                 // 🚀 FIX 2: Sync state, chart, and worker
                 set((state) => {
                     state.baseInterval = targetInterval;
                     // sourceInterval stays unchanged - it's the original data interval
                     // Update chart history with resampled candles
                     // 🔥 FIX: Don't divide if time is already in seconds (< 10 billion)
-                    state.candleHistory = cached.map((c: ResamplerCandle) => {
+                    state.candleHistory = completeCandles.map((c: ResamplerCandle) => {
                         const timeInMs = typeof c.time === 'number' ? c.time : new Date(c.time).getTime();
                         const timeInSeconds = timeInMs > 10_000_000_000 ? timeInMs / 1000 : timeInMs;
 
@@ -778,8 +788,8 @@ export const useSimulationStore = create<SimulationState>()(
                     });
                 });
 
-                console.log(`[Store] 📊 Chart updated with ${cached.length} ${targetInterval} candles`);
-                return cached;
+                console.log(`[Store] 📊 Chart updated with ${completeCandles.length} ${targetInterval} candles`);
+                return completeCandles;
             }
 
             // 🔥 FIX: Resample from SOURCE interval, not current baseInterval
@@ -834,8 +844,19 @@ export const useSimulationStore = create<SimulationState>()(
 
         // 🆕 Master Blueprint: Get interval button states
         getIntervalStates(): IntervalState[] {
+            // 🔥 FIX #1: Use sourceInterval for compatibility check
+            // After switching intervals, baseInterval changes but sourceInterval remains the original data source
             const state: SimulationState = useSimulationStore.getState();
-            return getAvailableIntervals(state.baseInterval, state.baseData);
+
+            // Use sourceInterval (original data) for compatibility, not baseInterval (current display)
+            const evalInterval = state.sourceInterval || state.baseInterval;
+            const evalData = state.baseData;
+
+            if (!evalInterval || evalData.length === 0) {
+                return [];
+            }
+
+            return getAvailableIntervals(evalInterval, evalData);
         },
 
         // 🆕 Master Blueprint: Clear interval cache
