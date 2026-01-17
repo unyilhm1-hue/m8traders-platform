@@ -142,8 +142,9 @@ function parseTimeToTimestamp(timeStr: string | number, dateContext?: string): n
 }
 
 /**
- * Normalize candle schema from various formats to standard t/o/h/l/c/v
- * Handles both legacy (time/open/high/low/close) and new (t/o/h/l/c) formats
+ * Normalize candle schema from MERGED format to standard t/o/h/l/c/v
+ * STRICT: Only accepts timestamp field (ISO 8601 format)
+ * Rejects legacy formats without timestamp metadata
  */
 function normalizeCandle(raw: any, dateContext?: string): Candle {
     // If already in correct format with numeric timestamp, return as-is
@@ -151,47 +152,90 @@ function normalizeCandle(raw: any, dateContext?: string): Candle {
         return raw as Candle;
     }
 
-    // Convert legacy format (time/open/high/low/close/volume) to t/o/h/l/c/v
-    const timeValue = raw.time || raw.t;
+    // 🔥 GATEKEEPER: Require timestamp field (MERGED format only)
+    if (!raw.timestamp) {
+        throw new Error('Invalid candle: missing timestamp field (MERGED format required)');
+    }
+
+    // Convert ISO 8601 to Unix timestamp in milliseconds
+    const timestampMs = new Date(raw.timestamp).getTime();
+
+    if (isNaN(timestampMs)) {
+        throw new Error(`Invalid timestamp format: ${raw.timestamp}`);
+    }
 
     return {
-        t: parseTimeToTimestamp(timeValue, dateContext),  // 🔥 FIX: Convert time string to timestamp
-        o: raw.open || raw.o,         // Support both 'open' and 'o'
-        h: raw.high || raw.h,         // Support both 'high' and 'h'
-        l: raw.low || raw.l,          // Support both 'low' and 'l'
-        c: raw.close || raw.c,        // Support both 'close' and 'c'
-        v: raw.volume || raw.v || 0   // Support both 'volume' and 'v', default to 0
+        t: timestampMs,
+        o: raw.open || raw.o,
+        h: raw.high || raw.h,
+        l: raw.low || raw.l,
+        c: raw.close || raw.c,
+        v: raw.volume || raw.v || 0
     };
 }
 
 /**
- * Load candles for a single date
+ * Load candles for a single date (MERGED files only)
+ * 🔥 GATEKEEPER: Only loads _MERGED.json files with metadata
  */
 async function loadSingleDayCandles(
     ticker: string,
     date: string,
     interval: IntervalType
 ): Promise<Candle[]> {
-    const filename = `${ticker}_${interval}_${date}.json`;
-    const filepath = path.join(DATA_DIR, filename);
+    // 🆕 MERGED file pattern (master multi-day file)
+    const mergedFilename = `${ticker}_${interval}_MERGED.json`;
+    const mergedPath = path.join(DATA_DIR, mergedFilename);
 
     try {
-        const content = await fs.readFile(filepath, 'utf-8');
+        const content = await fs.readFile(mergedPath, 'utf-8');
         const data = JSON.parse(content);
 
-        // Handle different JSON formats (array or object with candles property)
-        const rawCandles = Array.isArray(data) ? data : data.candles || [];
+        // 🔥 GATEKEEPER: Validate metadata existence
+        if (!data.metadata) {
+            throw new Error(`Invalid Data Source: Raw file detected (missing metadata) in ${mergedFilename}`);
+        }
 
-        // 🔥 NORMALIZE: Convert all candles to t/o/h/l/c/v format with proper timestamp
-        const normalizedCandles = rawCandles.map((raw: any) => normalizeCandle(raw, date));
+        console.log(`[SmartLoader] 📦 Loaded ${mergedFilename}: ${data.candles.length} total candles, metadata: ${data.metadata.data_start} to ${data.metadata.data_end}`);
 
-        console.log(`[SmartLoader] Loaded ${filename}: ${normalizedCandles.length} candles (normalized)`);
+        // Filter candles for target date (MERGED files contain multi-day data)
+        const targetDateCandles = filterCandlesByDate(data.candles, date);
+
+        if (targetDateCandles.length === 0) {
+            console.warn(`[SmartLoader] ⚠️ No candles found for ${ticker} on ${date} in MERGED file`);
+            return [];
+        }
+
+        // Normalize to t/o/h/l/c/v format
+        const normalizedCandles = targetDateCandles.map((raw: any) => normalizeCandle(raw, date));
+
+        console.log(`[SmartLoader] ✅ Extracted ${normalizedCandles.length} candles for ${date} from MERGED file`);
         return normalizedCandles;
 
     } catch (error) {
-        console.error(`[SmartLoader] Failed to load ${filename}:`, error);
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            console.error(`[SmartLoader] ❌ MERGED file not found: ${mergedFilename}. Only MERGED files are supported.`);
+        } else {
+            console.error(`[SmartLoader] ❌ Failed to load ${mergedFilename}:`, error);
+        }
         return [];
     }
+}
+
+/**
+ * Filter candles by target date (for MERGED files with multi-day data)
+ * Assumes timestamp is in ISO 8601 format
+ */
+function filterCandlesByDate(candles: any[], targetDate: string): any[] {
+    // Create date range for target date (00:00 to 23:59:59 UTC)
+    const startOfDay = new Date(targetDate + 'T00:00:00Z').getTime();
+    const endOfDay = new Date(targetDate + 'T23:59:59Z').getTime();
+
+    return candles.filter(c => {
+        if (!c.timestamp) return false;
+        const ts = new Date(c.timestamp).getTime();
+        return ts >= startOfDay && ts <= endOfDay;
+    });
 }
 
 /**
@@ -216,60 +260,85 @@ async function loadWarmupBuffer(
         return cached.slice(-warmupCount);
     }
 
-    const buffer: Candle[] = [];
-    const startDateObj = new Date(startDate);
+    // 🔥 NEW APPROACH: Load from MERGED file instead of scanning daily files
+    const mergedFilename = `${ticker}_${interval}_MERGED.json`;
+    const mergedPath = path.join(DATA_DIR, mergedFilename);
 
-    // Scan backwards up to 60 days (should be more than enough)
-    const maxDaysBack = 60;
+    try {
+        const content = await fs.readFile(mergedPath, 'utf-8');
+        const data = JSON.parse(content);
 
-    for (let daysBack = 1; daysBack <= maxDaysBack && buffer.length < warmupCount; daysBack++) {
-        const scanDate = new Date(startDateObj);
-        scanDate.setDate(scanDate.getDate() - daysBack);
-
-        // Skip weekends for stock data
-        const dayOfWeek = scanDate.getDay();
-        if (dayOfWeek === 0 || dayOfWeek === 6) {
-            continue; // Sunday or Saturday
+        // Validate metadata
+        if (!data.metadata) {
+            console.error(`[SmartLoader] ❌ MERGED file missing metadata: ${mergedFilename}`);
+            return [];
         }
 
-        const dateStr = scanDate.toISOString().split('T')[0];
-        const candles = await loadSingleDayCandles(ticker, dateStr, interval);
+        console.log(`[SmartLoader] 📦 Loading warmup from ${mergedFilename} (${data.candles.length} total candles)`);
 
-        if (candles.length > 0) {
-            // Prepend (newest first, so reverse order)
-            buffer.unshift(...candles);
+        // Filter candles BEFORE startDate
+        const startDateMs = new Date(startDate + 'T00:00:00Z').getTime();
+        const warmupCandles = data.candles
+            .filter((c: any) => {
+                if (!c.timestamp) return false;
+                const ts = new Date(c.timestamp).getTime();
+                return ts < startDateMs; // Only candles BEFORE target date
+            })
+            .map((raw: any) => normalizeCandle(raw, startDate));
+
+        // Take last N candles (most recent before startDate)
+        const buffer = warmupCandles.slice(-warmupCount);
+
+        // Cache the buffer
+        if (buffer.length > 0) {
+            warmupCache.set(ticker, interval, buffer);
         }
+
+        console.log(`[SmartLoader] ✅ Warmup buffer: ${buffer.length} candles (target: ${warmupCount}, available: ${warmupCandles.length})`);
+
+        return buffer;
+
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            console.error(`[SmartLoader] ❌ MERGED file not found: ${mergedFilename}`);
+        } else {
+            console.error(`[SmartLoader] ❌ Failed to load warmup from ${mergedFilename}:`, error);
+        }
+        return [];
     }
-
-    // Trim to exactly warmupCount (take most recent)
-    if (buffer.length > warmupCount) {
-        buffer.splice(0, buffer.length - warmupCount);
-    }
-
-    // 🆕 FIX 1: Cache the loaded buffer
-    if (buffer.length > 0) {
-        warmupCache.set(ticker, interval, buffer);
-    }
-
-    console.log(`[SmartLoader] Warm-up buffer: ${buffer.length} candles (target: ${warmupCount})`);
-
-    return buffer;
 }
 
 /**
  * Quick check if data exists for a ticker+date+interval
+ * Now checks MERGED files instead of individual date files
  */
 export async function dataExists(
     ticker: string,
     date: string,
     interval: IntervalType
 ): Promise<boolean> {
-    const filename = `${ticker}_${interval}_${date}.json`;
-    const filepath = path.join(DATA_DIR, filename);
+    const mergedFilename = `${ticker}_${interval}_MERGED.json`;
+    const mergedPath = path.join(DATA_DIR, mergedFilename);
 
     try {
-        await fs.access(filepath);
-        return true;
+        // Check if MERGED file exists
+        await fs.access(mergedPath);
+
+        // Read metadata to verify date is in range
+        const content = await fs.readFile(mergedPath, 'utf-8');
+        const data = JSON.parse(content);
+
+        if (!data.metadata) {
+            return false;
+        }
+
+        // Check if target date is within MERGED file's date range
+        const targetDate = new Date(date);
+        const startDate = new Date(data.metadata.data_start.split('T')[0]);
+        const endDate = new Date(data.metadata.data_end.split('T')[0]);
+
+        return targetDate >= startDate && targetDate <= endDate;
+
     } catch {
         return false;
     }

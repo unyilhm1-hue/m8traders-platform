@@ -332,6 +332,10 @@ export function resampleCandles(
     sourceInterval: Interval,
     targetInterval: Interval
 ): ResampledCandle[] {
+    // 🔥 FIX: Auto-normalize input to ensure consistent format
+    // Handles both {t,o,h,l,c,v} and {time,open,high,low,close,volume} formats
+    const normalized = normalizeCandles(sourceCandles);
+
     // Validation
     if (!isCompatible(sourceInterval, targetInterval)) {
         throw new Error(
@@ -340,9 +344,9 @@ export function resampleCandles(
         );
     }
 
-    if (!canSwitch(sourceCandles, sourceInterval, targetInterval)) {
+    if (!canSwitch(normalized, sourceInterval, targetInterval)) {
         const potentialCandles = Math.floor(
-            (sourceCandles.length * intervalToMinutes(sourceInterval)) /
+            (normalized.length * intervalToMinutes(sourceInterval)) /
             intervalToMinutes(targetInterval)
         );
         throw new Error(
@@ -353,12 +357,12 @@ export function resampleCandles(
 
     // If same interval, return copy
     if (sourceInterval === targetInterval) {
-        return [...sourceCandles];
+        return [...normalized];
     }
 
     // Resample with metadata
     const bucketMinutes = intervalToMinutes(targetInterval);
-    const buckets = groupByTime(sourceCandles, bucketMinutes);
+    const buckets = groupByTime(normalized, bucketMinutes);
 
     // Calculate expected candles per bucket
     const ratio = intervalToMinutes(targetInterval) / intervalToMinutes(sourceInterval);

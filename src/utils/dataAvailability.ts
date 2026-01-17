@@ -54,7 +54,7 @@ export async function scanDataDirectory(): Promise<Record<string, DataIndex>> {
                 continue;
             }
 
-            const { ticker, interval, date } = metadata;
+            const { ticker, interval, date, isMergedFile } = metadata;
 
             // Initialize ticker if not exists
             if (!index[ticker]) {
@@ -70,21 +70,56 @@ export async function scanDataDirectory(): Promise<Record<string, DataIndex>> {
                 intervalEntry = {
                     interval,
                     dates: [],
-                    dateRange: { earliest: date, latest: date }
+                    dateRange: { earliest: '', latest: '' }
                 };
                 index[ticker].intervals.push(intervalEntry);
             }
 
-            // Add date (if not duplicate)
-            if (!intervalEntry.dates.includes(date)) {
-                intervalEntry.dates.push(date);
+            // Handle MERGED files: read metadata to get date range
+            if (isMergedFile) {
+                try {
+                    const filepath = path.join(DATA_DIR, file);
+                    const content = await fs.readFile(filepath, 'utf-8');
+                    const data = JSON.parse(content);
 
-                // Update date range
-                if (date < intervalEntry.dateRange.earliest) {
-                    intervalEntry.dateRange.earliest = date;
+                    if (data.metadata && data.metadata.data_start && data.metadata.data_end) {
+                        // Extract date from ISO 8601 timestamps
+                        const startDate = data.metadata.data_start.split('T')[0];
+                        const endDate = data.metadata.data_end.split('T')[0];
+
+                        // Generate all dates in range (for availability checking)
+                        const dates = generateDateRange(startDate, endDate);
+                        dates.forEach(d => {
+                            if (!intervalEntry!.dates.includes(d)) {
+                                intervalEntry!.dates.push(d);
+                            }
+                        });
+
+                        // Update date range
+                        if (!intervalEntry.dateRange.earliest || startDate < intervalEntry.dateRange.earliest) {
+                            intervalEntry.dateRange.earliest = startDate;
+                        }
+                        if (!intervalEntry.dateRange.latest || endDate > intervalEntry.dateRange.latest) {
+                            intervalEntry.dateRange.latest = endDate;
+                        }
+
+                        console.log(`[DataScanner] Indexed MERGED file: ${file} (${startDate} to ${endDate}, ${dates.length} dates)`);
+                    }
+                } catch (error) {
+                    console.error(`[DataScanner] Failed to read MERGED file ${file}:`, error);
                 }
-                if (date > intervalEntry.dateRange.latest) {
-                    intervalEntry.dateRange.latest = date;
+            } else {
+                // Legacy file: single date
+                if (!intervalEntry.dates.includes(date)) {
+                    intervalEntry.dates.push(date);
+
+                    // Update date range
+                    if (!intervalEntry.dateRange.earliest || date < intervalEntry.dateRange.earliest) {
+                        intervalEntry.dateRange.earliest = date;
+                    }
+                    if (!intervalEntry.dateRange.latest || date > intervalEntry.dateRange.latest) {
+                        intervalEntry.dateRange.latest = date;
+                    }
                 }
             }
         }
@@ -111,6 +146,23 @@ export async function scanDataDirectory(): Promise<Record<string, DataIndex>> {
         console.error('[DataScanner] Failed to scan data directory:', error);
         return {};
     }
+}
+
+/**
+ * Generate array of dates between start and end (inclusive)
+ * Helper for MERGED file date range expansion
+ */
+function generateDateRange(startDate: string, endDate: string): string[] {
+    const dates: string[] = [];
+    const current = new Date(startDate);
+    const end = new Date(endDate);
+
+    while (current <= end) {
+        dates.push(current.toISOString().split('T')[0]);
+        current.setDate(current.getDate() + 1);
+    }
+
+    return dates;
 }
 
 /**

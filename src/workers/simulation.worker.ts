@@ -1001,15 +1001,37 @@ class SimulationEngine {
         const candleTime = Math.floor(candle.t / 1000);
 
         // 🔥 SEAMLESS TRANSITION: Check if current.open === previous.close
+        // Per quant-dev.md: "Only show a gap if the data actually contains a gap"
         const prevCandle = this.currentCandleIndex > 0 ? this.candles[this.currentCandleIndex - 1] : null;
         const startPrice = candle.o;
 
-        if (prevCandle && Math.abs(candle.o - prevCandle.c) < 0.01) {
-            // Seamless: Start at previous close (pixel-perfect continuity)
-            console.log(`[SimWorker] 🔗 Seamless transition: ${prevCandle.c} → ${candle.o}`);
-        } else if (prevCandle) {
-            // Gap: Show instant jump
-            console.log(`[SimWorker] 📊 Gap detected: ${prevCandle.c} → ${candle.o}`);
+        if (prevCandle) {
+            const gapSize = Math.abs(candle.o - prevCandle.c);
+            const gapPercent = (gapSize / prevCandle.c) * 100;
+
+            // Stricter threshold: 0.001 for pixel-perfect continuity
+            if (gapSize < 0.001) {
+                // Perfect seamless transition
+                console.log(`[SimWorker] 🔗 Seamless transition: ${prevCandle.c.toFixed(2)} → ${candle.o.toFixed(2)}`);
+            } else if (gapSize < 1.0) {
+                // Micro-gap (acceptable for tick size rounding)
+                console.log(`[SimWorker] 📏 Micro-gap: ${prevCandle.c.toFixed(2)} → ${candle.o.toFixed(2)} (${gapSize.toFixed(3)} pts, ${gapPercent.toFixed(2)}%)`);
+            } else {
+                // Significant gap (market event or data quality issue)
+                console.warn(`[SimWorker] ⚠️ Gap detected: ${prevCandle.c.toFixed(2)} → ${candle.o.toFixed(2)} (${gapSize.toFixed(2)} pts, ${gapPercent.toFixed(2)}%)`);
+
+                // Track gap for metrics
+                postMessage({
+                    type: 'GAP_DETECTED',
+                    data: {
+                        candleIndex: this.currentCandleIndex,
+                        prevClose: prevCandle.c,
+                        currentOpen: candle.o,
+                        gapSize,
+                        gapPercent
+                    }
+                });
+            }
         }
 
         // 🔥 FIX C: Lock open to prevent mutation during bar progression

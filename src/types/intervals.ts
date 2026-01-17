@@ -110,40 +110,65 @@ export function getIntervalMultiplier(
 
 /**
  * Parse filename to extract metadata
- * Format: TICKER_INTERVAL_DATE.json
+ * Supports both legacy and MERGED formats:
+ * - Legacy: TICKER_INTERVAL_DATE.json (e.g., ADRO_1m_2026-01-15.json)
+ * - MERGED: TICKER_INTERVAL_MERGED.json (e.g., ADRO_1m_MERGED.json)
  * 
  * @example
  * parseFilename('ADRO_1m_2026-01-15.json') 
- * → { ticker: 'ADRO', interval: '1m', date: '2026-01-15' }
+ * → { ticker: 'ADRO', interval: '1m', date: '2026-01-15', isMergedFile: false }
+ * parseFilename('ADRO_1m_MERGED.json')
+ * → { ticker: 'ADRO', interval: '1m', date: 'MERGED', isMergedFile: true }
  */
 export interface FileMetadata {
     ticker: string;
     interval: IntervalType;
-    date: string;
+    date: string;  // Actual date for legacy files, 'MERGED' for merged files
     filename: string;
+    isMergedFile: boolean;
 }
 
 export function parseFilename(filename: string): FileMetadata | null {
-    const match = filename.match(/^([A-Z]+)_(\d+[mhd])_(\d{4}-\d{2}-\d{2})\.json$/);
+    // Try MERGED format first: TICKER_INTERVAL_MERGED.json
+    const mergedMatch = filename.match(/^([A-Z]+)_(\d+[mhd])_MERGED\.json$/);
+    if (mergedMatch) {
+        const [, ticker, interval] = mergedMatch;
 
-    if (!match) {
-        return null;
+        if (!INTERVALS.includes(interval as IntervalType)) {
+            console.warn(`[Intervals] Unknown interval in MERGED file: ${interval}`);
+            return null;
+        }
+
+        return {
+            ticker,
+            interval: interval as IntervalType,
+            date: 'MERGED',
+            filename,
+            isMergedFile: true
+        };
     }
 
-    const [, ticker, interval, date] = match;
+    // Try legacy format: TICKER_INTERVAL_DATE.json
+    const legacyMatch = filename.match(/^([A-Z]+)_(\d+[mhd])_(\d{4}-\d{2}-\d{2})\.json$/);
+    if (legacyMatch) {
+        const [, ticker, interval, date] = legacyMatch;
 
-    // Validate interval is supported
-    if (!INTERVALS.includes(interval as IntervalType)) {
-        console.warn(`[Intervals] Unknown interval: ${interval}`);
-        return null;
+        if (!INTERVALS.includes(interval as IntervalType)) {
+            console.warn(`[Intervals] Unknown interval: ${interval}`);
+            return null;
+        }
+
+        return {
+            ticker,
+            interval: interval as IntervalType,
+            date,
+            filename,
+            isMergedFile: false
+        };
     }
 
-    return {
-        ticker,
-        interval: interval as IntervalType,
-        date,
-        filename
-    };
+    // Unrecognized format
+    return null;
 }
 
 /**

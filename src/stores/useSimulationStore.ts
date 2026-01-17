@@ -441,6 +441,13 @@ export const useSimulationStore = create<SimulationState>()(
 
         setCandleHistory(candles) {
             set((state) => {
+                // 🔥 GATEKEEPER: Validate that candles come from MERGED source
+                // This is a safety check - smartLoader should already enforce this
+                if (candles.length > 0 && !candles[0].t) {
+                    console.error('[SimulationStore] ❌ Rejected: Invalid candle format (missing t field)');
+                    return;
+                }
+
                 // ✅ OPTIMIZATION: Prevent unnecessary array recreation
                 // Check if new data is identical to current state
                 if (state.candleHistory.length > 0 && candles.length > 0) {
@@ -536,6 +543,19 @@ export const useSimulationStore = create<SimulationState>()(
             const { marketConfig } = useSimulationStore.getState();
 
             console.log(`[Store] 🌏 Loading with timezone: ${marketConfig.timezone}, filter: ${marketConfig.filterEnabled ? `${marketConfig.openHour}-${marketConfig.closeHour}` : 'disabled'}`);
+
+            // 🔥 GATEKEEPER: Validate data source
+            if (allCandles.length === 0) {
+                console.error('[SimulationStore] ❌ No candles provided');
+                return { historyCount: 0, simCount: 0, error: 'No candles provided' };
+            }
+
+            // Validate candles have required timestamp field (from MERGED format)
+            const firstCandle = allCandles[0];
+            if (!firstCandle.t && !firstCandle.time) {
+                console.error('[SimulationStore] ❌ Rejected: Invalid candle format (missing timestamp field)');
+                return { historyCount: 0, simCount: 0, error: 'Invalid data format: missing timestamp' };
+            }
 
             // --- 1. SETTING BATAS WAKTU BASED ON CONFIGURED TIMEZONE ---
             const historyContext: ChartCandle[] = [];
