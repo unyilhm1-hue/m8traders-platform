@@ -57,7 +57,7 @@ function SimDemoPageContent() {
 
                 // 🔥 UPDATED: Use dynamic selectedTicker instead of hardcoded 'ADRO'
                 const ticker = selectedTicker;
-                const targetDate = '2026-01-15';  // TODO: Support date selection
+                const targetDate = '2026-01-14';  // ✅ Full day data available (2026-01-15 only until 09:14)
                 const interval = '1m';             // TODO: Support interval switching
 
                 const response = await fetch(
