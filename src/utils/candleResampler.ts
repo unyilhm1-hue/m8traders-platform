@@ -39,16 +39,27 @@ export type Interval = '1m' | '2m' | '5m' | '15m' | '30m' | '60m' | '1h' | '4h' 
  * 🚀 NORMALIZATION: Convert WorkerCandle {t,o,h,l,c,v} to ResamplerCandle {time,open,high,low,close,volume}
  * 
  * This utility ensures compatibility when data comes from APIs using short-name schema
+ * 
+ * 🔥 FIX #6: Strict validation - reject candles without timestamp
  */
 export function normalizeCandle(candle: any): Candle {
-    // If already normalized, return as-is
+    // If already normalized, validate it has time
     if ('time' in candle && 'open' in candle) {
+        if (candle.time === undefined || candle.time === null) {
+            throw new Error('[Resampler] Cannot normalize candle without timestamp (found null/undefined in normalized format)');
+        }
         return candle as Candle;
+    }
+
+    // 🔥 STRICT: Reject candles without timestamp
+    const timestamp = candle.t ?? candle.time;
+    if (timestamp === undefined || timestamp === null) {
+        throw new Error('[Resampler] Cannot normalize candle without timestamp - missing both t and time fields');
     }
 
     // Convert from worker schema {t,o,h,l,c,v} to resampler schema
     return {
-        time: candle.t ?? candle.time ?? Date.now(),
+        time: timestamp,
         open: candle.o ?? candle.open ?? 0,
         high: candle.h ?? candle.high ?? 0,
         low: candle.l ?? candle.low ?? 0,
@@ -101,7 +112,7 @@ export function isCompatible(source: Interval, target: Interval): boolean {
 
 /**
  * Calculate if there's enough data to switch to target interval
- * 🔥 FIX: Check both candle count AND time coverage
+ * 🔥 FIX #3: Sort data and validate timestamps before coverage check
  * Rule: Must have at least 10 candles in target interval AND cover 10x interval duration
  */
 export function canSwitch(
@@ -117,21 +128,39 @@ export function canSwitch(
         return false;
     }
 
+    // 🔥 FIX #3: Sort candles by time first (handles unsorted data)
+    const sorted = [...sourceCandles].sort((a, b) => {
+        const timeA = typeof a.time === 'number' ? a.time : new Date(a.time).getTime();
+        const timeB = typeof b.time === 'number' ? b.time : new Date(b.time).getTime();
+        return timeA - timeB;
+    });
+
+    // 🔥 FIX #3: Validate no invalid timestamps
+    const invalidCount = sorted.filter(c => {
+        const t = typeof c.time === 'number' ? c.time : new Date(c.time).getTime();
+        return isNaN(t) || t <= 0;
+    }).length;
+
+    if (invalidCount > 0) {
+        console.warn(`[Resampler] ${invalidCount} candles with invalid timestamps, cannot switch`);
+        return false;
+    }
+
     const targetMinutes = intervalToMinutes(targetInterval);
     const requiredCount = 10;
 
     // Check candle count (existing logic)
-    const totalMinutes = sourceCandles.length * intervalToMinutes(sourceInterval);
+    const totalMinutes = sorted.length * intervalToMinutes(sourceInterval);
     const potentialCandles = Math.floor(totalMinutes / targetMinutes);
 
     if (potentialCandles < requiredCount) {
         return false;
     }
 
-    // 🔥 FIX: Check time coverage (new logic)
+    // 🔥 FIX: Check time coverage (now with sorted & validated data)
     // Ensure data actually spans enough time, not just has enough candles
-    const firstTime = parseTime(sourceCandles[0].time);
-    const lastTime = parseTime(sourceCandles[sourceCandles.length - 1].time);
+    const firstTime = parseTime(sorted[0].time);
+    const lastTime = parseTime(sorted[sorted.length - 1].time);
     const spanMinutes = (lastTime - firstTime) / 60_000;
     const requiredSpan = targetMinutes * requiredCount;
 
@@ -189,17 +218,25 @@ function snapToGrid(timestamp: number, intervalMinutes: number): number {
 
 /**
  * Group candles into buckets based on target interval
+ * 🔥 FIX #5: Sort input before grouping to handle unsorted data
  */
 function groupByTime(
     candles: Candle[],
     bucketMinutes: number
 ): Candle[][] {
+    // 🔥 FIX #5: Sort candles first to ensure correct grouping
+    const sorted = [...candles].sort((a, b) => {
+        const timeA = parseTime(a.time);
+        const timeB = parseTime(b.time);
+        return timeA - timeB;
+    });
+
     const allBuckets: Candle[][] = [];
     let currentBucket: Candle[] = [];
     let bucketStartTimestamp: number | null = null;
 
-    for (let i = 0; i < candles.length; i++) {
-        const candle = candles[i];
+    for (let i = 0; i < sorted.length; i++) {
+        const candle = sorted[i];
         const currentTime = parseTime(candle.time);
         const snappedTime = snapToGrid(currentTime, bucketMinutes);
 
@@ -277,8 +314,20 @@ function aggregateBucket(bucket: Candle[], expectedCount?: number): ResampledCan
         throw new Error('Cannot aggregate empty bucket');
     }
 
+    // 🔥 FIX #4: Add metadata even for single bucket
     if (bucket.length === 1) {
-        return bucket[0];
+        const result = bucket[0];
+        if (expectedCount !== undefined) {
+            return {
+                ...result,
+                metadata: {
+                    isPartial: bucket.length < expectedCount,
+                    candleCount: bucket.length,
+                    expectedCount
+                }
+            };
+        }
+        return result;
     }
 
     // Single-pass aggregation (30% faster than Math.max/min)

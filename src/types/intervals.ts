@@ -129,8 +129,9 @@ export interface FileMetadata {
 }
 
 export function parseFilename(filename: string): FileMetadata | null {
+    // 🔥 FIX #17: Support ticker with dots (e.g., BBRI.JK)
     // Try MERGED format first: TICKER_INTERVAL_MERGED.json
-    const mergedMatch = filename.match(/^([A-Z]+)_(\d+[mhd])_MERGED\.json$/);
+    const mergedMatch = filename.match(/^([A-Z]+(?:\.[A-Z]+)?)_(\d+[mhd])_MERGED\.json$/);
     if (mergedMatch) {
         const [, ticker, interval] = mergedMatch;
 
@@ -149,7 +150,8 @@ export function parseFilename(filename: string): FileMetadata | null {
     }
 
     // Try legacy format: TICKER_INTERVAL_DATE.json
-    const legacyMatch = filename.match(/^([A-Z]+)_(\d+[mhd])_(\d{4}-\d{2}-\d{2})\.json$/);
+    // 🔥 FIX #17: Support ticker with dots
+    const legacyMatch = filename.match(/^([A-Z]+(?:\.[A-Z]+)?)_(\d+[mhd])_(\d{4}-\d{2}-\d{2})\.json$/);
     if (legacyMatch) {
         const [, ticker, interval, date] = legacyMatch;
 

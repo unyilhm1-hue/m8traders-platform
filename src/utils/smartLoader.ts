@@ -151,26 +151,22 @@ function normalizeCandle(raw: any, dateContext?: string): Candle {
     if (raw.t !== undefined && raw.o !== undefined && typeof raw.t === 'number') {
         return raw as Candle;
     }
-
-    // 🔥 GATEKEEPER: Require timestamp field (MERGED format only)
+    // 🔥 Priority 1: timestamp (ISO 8601 format from MERGED files)
     if (!raw.timestamp) {
-        throw new Error('Invalid candle: missing timestamp field (MERGED format required)');
+        throw new Error('[Loader] Cannot normalize candle without timestamp field');
     }
 
-    // Convert ISO 8601 to Unix timestamp in milliseconds
-    const timestampMs = new Date(raw.timestamp).getTime();
+    const timestamp = parseTimeToTimestamp(raw.timestamp, dateContext);
 
-    if (isNaN(timestampMs)) {
-        throw new Error(`Invalid timestamp format: ${raw.timestamp}`);
-    }
-
+    // 🔥 FIX #20: Use nullish coalescing to handle zero values correctly
+    // e.g., if open=0 is valid, we don't want to fallback to raw.o
     return {
-        t: timestampMs,
-        o: raw.open || raw.o,
-        h: raw.high || raw.h,
-        l: raw.low || raw.l,
-        c: raw.close || raw.c,
-        v: raw.volume || raw.v || 0
+        t: timestamp,
+        o: raw.open ?? raw.o ?? 0,
+        h: raw.high ?? raw.h ?? 0,
+        l: raw.low ?? raw.l ?? 0,
+        c: raw.close ?? raw.c ?? 0,
+        v: raw.volume ?? raw.v ?? 0
     };
 }
 
@@ -223,24 +219,31 @@ async function loadSingleDayCandles(
 }
 
 /**
- * Filter candles by target date (for MERGED files with multi-day data)
- * Assumes timestamp is in ISO 8601 format
+ * Filter candles from MERGED file that belong to a specific date
+ * 
+ * 🔥 FIX #19: Use WIB timezone for consistency with store
+ * Prevents off-by-one day errors when filtering local data
+ * 
+ * @param candles - Array of candles from MERGED file (can span multiple days)
+ * @param targetDate - Date string in YYYY-MM-DD format
+ * @returns Candles that fall within the target date (00:00:00 to 23:59:59 WIB)
  */
-function filterCandlesByDate(candles: any[], targetDate: string): any[] {
-    // Create date range for target date (00:00 to 23:59:59 UTC)
-    const startOfDay = new Date(targetDate + 'T00:00:00Z').getTime();
-    const endOfDay = new Date(targetDate + 'T23:59:59Z').getTime();
+function filterCandlesByDate(candles: Candle[], targetDate: string): Candle[] {
+    // 🔥 FIX #19: Use WIB timezone (+07:00) for consistency
+    const startOfDay = new Date(`${targetDate}T00:00:00+07:00`).getTime();
+    const endOfDay = new Date(`${targetDate}T23:59:59.999+07:00`).getTime();
 
-    return candles.filter(c => {
-        if (!c.timestamp) return false;
-        const ts = new Date(c.timestamp).getTime();
+    return candles.filter(candle => {
+        const ts = candle.t;
         return ts >= startOfDay && ts <= endOfDay;
     });
 }
 
 /**
- * Load warm-up buffer by scanning backwards from start date
- * Collects candles from previous trading days until warmupCount is reached
+ * Load warmup buffer (historical candles before target date)
+ * 
+ * Strategy: Load MERGED file once and filter for candles BEFORE target date
+ * This eliminates 404 errors from scanning individual daily files
  * 
  * @example
  * // Target: 2026-01-15, warmup: 200 candles

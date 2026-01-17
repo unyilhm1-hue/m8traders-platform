@@ -112,6 +112,19 @@ export function invalidateCache(ticker?: string, interval?: Interval): void {
 /**
  * Split candles into buffer (historical) and active (future) based on start date
  */
+/**
+ * Normalize timestamp to milliseconds
+ * 🔥 FIX #16: Handle both seconds and milliseconds
+ * If timestamp < 1e10, it's in seconds (need to multiply by 1000)
+ */
+function normalizeTimestamp(ts: number): number {
+    return ts < 10_000_000_000 ? ts * 1000 : ts;
+}
+
+/**
+ * Split candles by target date
+ * 🔥 FIX #16: Normalize timestamps before boundary check
+ */
 function splitByDate(
     candles: Candle[],
     startDate: Date,
@@ -122,7 +135,7 @@ function splitByDate(
     // Find index where active data starts
     const activeStartIndex = candles.findIndex(candle => {
         const candleTime = typeof candle.time === 'number'
-            ? candle.time
+            ? normalizeTimestamp(candle.time)  // 🔥 FIX #16: Normalize here
             : new Date(candle.time).getTime();
         return candleTime >= startTimestamp;
     });
@@ -171,8 +184,15 @@ export async function loadWithBuffer(config: BufferConfig): Promise<CachedData> 
     const data = await response.json();
     const allCandles: Candle[] = Array.isArray(data) ? data : data.candles || [];
 
+    // 🔥 FIX #24: Sort candles by time before split to handle unsorted input
+    const sorted = allCandles.sort((a, b) => {
+        const timeA = typeof a.time === 'number' ? a.time : new Date(a.time).getTime();
+        const timeB = typeof b.time === 'number' ? b.time : new Date(b.time).getTime();
+        return timeA - timeB;
+    });
+
     // Split into buffer and active
-    const { buffer, active } = splitByDate(allCandles, startDate, bufferSize);
+    const { buffer, active } = splitByDate(sorted, startDate, bufferSize);
 
     // Create cached data
     const cachedData: CachedData = {

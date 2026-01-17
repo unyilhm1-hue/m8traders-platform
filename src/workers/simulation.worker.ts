@@ -239,6 +239,25 @@ function roundToIDXTickSize(price: number): number {
 }
 
 /**
+ * Convert interval string to milliseconds
+ * 🔥 FIX #7: Helper for gap clamping
+ */
+function intervalToMs(interval: string): number {
+    const match = interval.match(/^(\d+)([mhd])$/);
+    if (!match) return 60000; // Default 1m
+
+    const [, value, unit] = match;
+    const num = parseInt(value);
+
+    switch (unit) {
+        case 'm': return num * 60 * 1000;
+        case 'h': return num * 3600 * 1000;
+        case 'd': return num * 86400 * 1000;
+        default: return 60000;
+    }
+}
+
+/**
  * 🎯 QUICK WIN #3: Check if timestamp is within market hours
  * Harmonized with store filtering logic
  */
@@ -252,13 +271,13 @@ function isWithinMarketHours(timestamp: number, config: MarketConfig = DEFAULT_M
     const minute = parseInt(minuteStr);
     const decimal = hour + minute / 60;
 
-    // Market hours: 09:00 - 16:00 WIB
-    if (decimal < config.openHour || decimal >= config.closeHour) {
+    // 🔥 FIX #11: Market hours: 09:00 - 16:00 (inclusive of 16:00:00)
+    // Changed from >= to > for closeHour to match store behavior
+    if (decimal < config.openHour || decimal > config.closeHour) {
         return false;
     }
 
     // Lunch break: 11:30 - 13:30 WIB (11.5 - 13.5 decimal)
-    // 🎯 Harmonized with store (was 11.5-13.5, now consistent)
     if (decimal >= config.lunchBreakStart && decimal < config.lunchBreakEnd) {
         return false;
     }
@@ -1065,8 +1084,15 @@ class SimulationEngine {
         const candle = this.candles[this.currentCandleIndex];
         const nextCandle = this.candles[this.currentCandleIndex + 1];
 
-        // Calculate dynamic duration
-        const durationMs = nextCandle ? (nextCandle.t - candle.t) : 60000; // Fallback to 1m
+        // 🔥 FIX #7: Calculate dynamic duration with gap clamping
+        let durationMs = nextCandle ? (nextCandle.t - candle.t) : 60000; // Fallback to 1m
+
+        // Clamp to max 2x interval to handle gaps (overnight/holiday)
+        const maxDuration = intervalToMs(this.currentInterval) * 2;
+        if (durationMs > maxDuration) {
+            console.warn(`[SimWorker] Gap detected: ${(durationMs / 60000).toFixed(0)}m, clamping to ${(maxDuration / 60000).toFixed(0)}m`);
+            durationMs = maxDuration;
+        }
 
         // Pattern analysis
         const pattern = analyzeCandle(candle);
