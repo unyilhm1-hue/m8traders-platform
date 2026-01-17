@@ -85,8 +85,6 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
                     case 'CANDLE_UPDATE':
                         // Update current live candle in store (for chart)
                         if (event.data.candle) {
-                            // 🔍 CHECKPOINT 2: Hook reception
-                            console.log(`[Hook→] Received: time=${event.data.candle.time}, C=${event.data.candle.close.toFixed(2)}`);
                             updateCurrentCandle(event.data.candle);
                         }
                         break;

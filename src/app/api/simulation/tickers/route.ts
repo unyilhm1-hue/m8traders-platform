@@ -70,10 +70,8 @@ export async function GET(request: NextRequest) {
 
         return NextResponse.json({
             success: true,
-            data: {
-                tickers,
-                count: tickers.length
-            }
+            tickers,
+            count: tickers.length
         });
 
     } catch (error) {

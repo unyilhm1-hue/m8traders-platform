@@ -3,6 +3,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { ChevronDown } from 'lucide-react';
 
+interface TickerData {
+    ticker: string;
+    metadata: any;
+    intervals: string[];
+}
+
 interface TickerSelectorProps {
     selectedTicker: string;
     onTickerChange: (ticker: string) => void;
@@ -10,7 +16,7 @@ interface TickerSelectorProps {
 }
 
 export function TickerSelector({ selectedTicker, onTickerChange, disabled = false }: TickerSelectorProps) {
-    const [availableTickers, setAvailableTickers] = useState<string[]>([]);
+    const [availableTickers, setAvailableTickers] = useState<TickerData[]>([]);
     const [isOpen, setIsOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const dropdownRef = useRef<HTMLDivElement>(null);
@@ -20,12 +26,18 @@ export function TickerSelector({ selectedTicker, onTickerChange, disabled = fals
         fetch('/api/simulation/tickers')
             .then(res => res.json())
             .then(data => {
-                if (data.success) {
+                if (data.success && Array.isArray(data.tickers)) {
                     setAvailableTickers(data.tickers);
                     console.log(`[TickerSelector] Loaded ${data.tickers.length} tickers`);
+                } else {
+                    console.warn('[TickerSelector] Invalid response or missing tickers:', data);
+                    setAvailableTickers([]);
                 }
             })
-            .catch(err => console.error('[TickerSelector] Failed to load tickers:', err));
+            .catch(err => {
+                console.error('[TickerSelector] Failed to load tickers:', err);
+                setAvailableTickers([]);
+            });
     }, []);
 
     // Close dropdown when clicking outside
@@ -47,12 +59,12 @@ export function TickerSelector({ selectedTicker, onTickerChange, disabled = fals
     }, [isOpen]);
 
     // Filter tickers based on search query
-    const filteredTickers = availableTickers.filter(ticker =>
-        ticker.toLowerCase().includes(searchQuery.toLowerCase())
+    const filteredTickers = availableTickers.filter(tickerData =>
+        tickerData.ticker.toLowerCase().includes(searchQuery.toLowerCase())
     );
 
-    const handleTickerSelect = (ticker: string) => {
-        onTickerChange(ticker);
+    const handleTickerSelect = (tickerSymbol: string) => {
+        onTickerChange(tickerSymbol);
         setIsOpen(false);
         setSearchQuery('');
     };
@@ -85,37 +97,22 @@ export function TickerSelector({ selectedTicker, onTickerChange, disabled = fals
                     bg-[var(--bg-secondary)] border border-[var(--bg-subtle-border)] rounded-lg shadow-xl
                     backdrop-blur-md overflow-hidden"
                 >
-                    {/* Search Input */}
-                    <div className="p-2 border-b border-[var(--bg-subtle-border)]">
-                        <input
-                            type="text"
-                            placeholder="Search ticker..."
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full px-3 py-1.5 rounded text-sm
-                                bg-[var(--bg-tertiary)] border border-[var(--bg-subtle-border)]
-                                text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)]
-                                focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
-                            autoFocus
-                        />
-                    </div>
-
-                    {/* Ticker List */}
-                    <div className="max-h-64 overflow-y-auto">
-                        {filteredTickers.length > 0 ? (
-                            filteredTickers.map(ticker => (
+                    {/* Ticker List - Full List (No Search) */}
+                    <div className="max-h-80 overflow-y-auto no-scrollbar">
+                        {availableTickers.length > 0 ? (
+                            availableTickers.map(tickerData => (
                                 <button
-                                    key={ticker}
-                                    onClick={() => handleTickerSelect(ticker)}
+                                    key={tickerData.ticker}
+                                    onClick={() => handleTickerSelect(tickerData.ticker)}
                                     className={`
                                         w-full px-4 py-2 text-left text-sm transition-colors
-                                        ${ticker === selectedTicker
+                                        ${tickerData.ticker === selectedTicker
                                             ? 'bg-[var(--accent-primary)] text-white font-bold'
                                             : 'text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]'
                                         }
                                     `}
                                 >
-                                    {ticker}
+                                    {tickerData.ticker}
                                 </button>
                             ))
                         ) : (

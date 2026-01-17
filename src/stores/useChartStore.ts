@@ -96,6 +96,7 @@ const DEFAULT_INDICATORS: Indicator[] = [
     { id: 'sar', type: 'sar', enabled: false, color: '#00BCD4' },
 
     // Volume
+    { id: 'volume', type: 'volume', enabled: true, color: 'rgba(38, 166, 154, 0.5)' }, // Default ON
     { id: 'obv', type: 'obv', enabled: false, color: '#FF9800' },
     { id: 'vr-26', type: 'vr', period: 26, enabled: false, color: '#4CAF50' },
 ];

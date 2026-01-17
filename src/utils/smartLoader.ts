@@ -114,8 +114,8 @@ export async function loadWithSmartBuffering(
 }
 
 /**
- * Parse time string (HH:MM or HH:MM:SS) to timestamp in milliseconds
- * Assumes date context from surrounding data or uses current date
+ * Parse time string (HH:MM or HH:MM:SS) or ISO 8601 timestamp to milliseconds
+ * Handles both legacy time-only formats and modern full ISO timestamps
  */
 function parseTimeToTimestamp(timeStr: string | number, dateContext?: string): number {
     // If already a number, return as-is (assuming it's already a timestamp)
@@ -123,7 +123,17 @@ function parseTimeToTimestamp(timeStr: string | number, dateContext?: string): n
         return timeStr < 10000000000 ? timeStr * 1000 : timeStr;
     }
 
-    // Parse time string (HH:MM or HH:MM:SS)
+    // 🔥 FIX: Detect ISO 8601 full timestamp format from MERGED files
+    // Example: "2025-12-19T02:00:00Z" or "2026-01-14T10:30:00.000Z"
+    if (timeStr.includes('T') && (timeStr.includes('Z') || timeStr.includes('+'))) {
+        const timestamp = new Date(timeStr).getTime();
+        if (!isNaN(timestamp)) {
+            return timestamp;
+        }
+        console.warn(`[SmartLoader] Invalid ISO timestamp: ${timeStr}`);
+    }
+
+    // Parse legacy time-only string (HH:MM or HH:MM:SS)
     const parts = timeStr.split(':');
     if (parts.length < 2) {
         console.warn(`[SmartLoader] Invalid time format: ${timeStr}`);
@@ -146,28 +156,76 @@ function parseTimeToTimestamp(timeStr: string | number, dateContext?: string): n
  * STRICT: Only accepts timestamp field (ISO 8601 format)
  * Rejects legacy formats without timestamp metadata
  */
-function normalizeCandle(raw: any, dateContext?: string): Candle {
-    // If already in correct format with numeric timestamp, return as-is
-    if (raw.t !== undefined && raw.o !== undefined && typeof raw.t === 'number') {
-        return raw as Candle;
-    }
-    // 🔥 Priority 1: timestamp (ISO 8601 format from MERGED files)
-    if (!raw.timestamp) {
-        throw new Error('[Loader] Cannot normalize candle without timestamp field');
+/**
+ * Normalize candle schema from MERGED format to standard t/o/h/l/c/v
+ * STRICT: Only accepts timestamp field (ISO 8601 format)
+ * Rejects legacy formats without timestamp metadata
+ * 
+ * 🔥 PRO UPDATE: Includes Data Integrity Check & Volume Normalization
+ */
+function normalizeCandle(raw: any, dateContext?: string, metadata?: any): Candle | null {
+    // 🔥 FIX: Priority 1 - Zero Handling
+    // If invalid candle (all zeros), return null to skip
+    if (!raw.open && !raw.close && !raw.high && !raw.low) {
+        return null;
     }
 
-    const timestamp = parseTimeToTimestamp(raw.timestamp, dateContext);
+    // Timestamp parsing (same as before)
+    let timestamp: number;
+    if (raw.t !== undefined && typeof raw.t === 'number') {
+        timestamp = raw.t;
+    } else if (raw.timestamp) {
+        timestamp = parseTimeToTimestamp(raw.timestamp, dateContext);
+    } else {
+        return null; // Skip invalid candles
+    }
 
-    // 🔥 FIX #20: Use nullish coalescing to handle zero values correctly
-    // e.g., if open=0 is valid, we don't want to fallback to raw.o
-    return {
-        t: timestamp,
-        o: raw.open ?? raw.o ?? 0,
-        h: raw.high ?? raw.h ?? 0,
-        l: raw.low ?? raw.l ?? 0,
-        c: raw.close ?? raw.c ?? 0,
-        v: raw.volume ?? raw.v ?? 0
-    };
+    // 🔥 FIX: OHLC Sanitization
+    let o = raw.open ?? raw.o ?? 0;
+    let h = raw.high ?? raw.h ?? 0;
+    let l = raw.low ?? raw.l ?? 0;
+    let c = raw.close ?? raw.c ?? 0;
+    let v = raw.volume ?? raw.v ?? 0;
+
+    // Sanity Check: High must be >= max(Open, Close)
+    const maxOC = Math.max(o, c);
+    if (h < maxOC) h = maxOC;
+
+    // Sanity Check: Low must be <= min(Open, Close)
+    const minOC = Math.min(o, c);
+    if (l > minOC) l = minOC;
+
+    // Sanity Check: High must be >= Low
+    if (h < l) {
+        const temp = h;
+        h = l;
+        l = temp;
+    }
+
+    // 🔥 FIX: Metadata-First Volume Sanitization
+    // Goal: Detect if volume is in Shares (Millions) or Lots (Hundreds)
+    if (v > 0) {
+        let isShares = false;
+
+        // 1. Check Metadata explicit flag (future proofing)
+        if (metadata?.volume_type === 'shares' || metadata?.lot_size === 1) {
+            isShares = true;
+        } else if (metadata?.volume_type === 'lots' || metadata?.lot_size === 100) {
+            isShares = false;
+        }
+        // 2. Heuristic Fallback (if no metadata)
+        // If volume is massive (> 100,000 avg), it's likely Shares
+        // Note: We check per single candle here, slightly aggressive but safe enough for ID Stocks
+        else if (v > 500000) {
+            isShares = true;
+        }
+
+        if (isShares) {
+            v = Math.round(v / 100); // Convert to Lots
+        }
+    }
+
+    return { t: timestamp, o, h, l, c, v };
 }
 
 /**
@@ -203,7 +261,9 @@ async function loadSingleDayCandles(
         }
 
         // Normalize to t/o/h/l/c/v format
-        const normalizedCandles = targetDateCandles.map((raw: any) => normalizeCandle(raw, date));
+        const normalizedCandles = targetDateCandles
+            .map((raw: any) => normalizeCandle(raw, date, data.metadata))
+            .filter((c: any): c is Candle => c !== null);
 
         console.log(`[SmartLoader] ✅ Extracted ${normalizedCandles.length} candles for ${date} from MERGED file`);
         return normalizedCandles;
@@ -221,22 +281,70 @@ async function loadSingleDayCandles(
 /**
  * Filter candles from MERGED file that belong to a specific date
  * 
- * 🔥 FIX #19: Use WIB timezone for consistency with store
- * Prevents off-by-one day errors when filtering local data
+ * 🔥 FIX: Use UTC timezone to match UTC timestamps in MERGED files
+ * MERGED candles have timestamps like "2026-01-14T10:00:00Z" (UTC)
+ * So we must filter using UTC day boundaries, not WIB
  * 
  * @param candles - Array of candles from MERGED file (can span multiple days)
  * @param targetDate - Date string in YYYY-MM-DD format
- * @returns Candles that fall within the target date (00:00:00 to 23:59:59 WIB)
+ * @returns Candles that fall within the target date (00:00:00 to 23:59:59 UTC)
+ */
+/**
+ * Filter candles from MERGED file that belong to a specific date
+ * 
+ * 🔥 FIX: Use UTC timezone to match UTC timestamps in MERGED files
+ * MERGED candles have timestamps like "2026-01-14T10:00:00Z" (UTC)
+ * So we must filter using UTC day boundaries, not WIB
+ * 
+ * 🔥 FIX: Handle raw candles (timestamp string) vs normalized (t number)
  */
 function filterCandlesByDate(candles: Candle[], targetDate: string): Candle[] {
-    // 🔥 FIX #19: Use WIB timezone (+07:00) for consistency
-    const startOfDay = new Date(`${targetDate}T00:00:00+07:00`).getTime();
-    const endOfDay = new Date(`${targetDate}T23:59:59.999+07:00`).getTime();
+    // 🔥 FIX: Use UTC boundaries since data timestamps are in UTC
+    // "2026-01-14" → 2026-01-14 00:00:00 UTC to 2026-01-14 23:59:59.999 UTC
+    const startOfDay = new Date(`${targetDate}T00:00:00Z`).getTime();
+    const endOfDay = new Date(`${targetDate}T23:59:59.999Z`).getTime();
 
-    return candles.filter(candle => {
-        const ts = candle.t;
+    console.log(`[SmartLoader] Filtering ${candles.length} candles for date ${targetDate}`);
+    console.log(`[SmartLoader] UTC range: ${new Date(startOfDay).toISOString()} to ${new Date(endOfDay).toISOString()}`);
+
+    // Check first candle safely
+    const firstCandle = candles[0] as any;
+    if (firstCandle) {
+        const firstTs = firstCandle.t ?? (firstCandle.timestamp ? new Date(firstCandle.timestamp).getTime() : 'N/A');
+        console.log(`[SmartLoader] First candle timestamp: ${firstTs} (${new Date(firstTs).toISOString()})`);
+    }
+
+    const filtered = candles.filter(candle => {
+        // 🔥 Handle both normalized (t) and raw (timestamp) formats
+        let ts: number;
+        if ((candle as any).t !== undefined) {
+            ts = (candle as any).t;
+        } else if ((candle as any).timestamp) {
+            ts = new Date((candle as any).timestamp).getTime();
+        } else {
+            return false;
+        }
+
+        // Verify we are comparing milliseconds
         return ts >= startOfDay && ts <= endOfDay;
     });
+
+    console.log(`[SmartLoader] Filtered result: ${filtered.length} candles for ${targetDate}`);
+    if (filtered.length > 0) {
+        // Log first and last filtered candle to verify range
+        const firstFiltered = filtered[0] as any;
+        const lastFiltered = filtered[filtered.length - 1] as any;
+
+        const firstTs = firstFiltered.t ?? new Date(firstFiltered.timestamp).getTime();
+        const lastTs = lastFiltered.t ?? new Date(lastFiltered.timestamp).getTime();
+
+        console.log(`[SmartLoader] First filtered: ${firstTs} (${new Date(firstTs).toISOString()})`);
+        console.log(`[SmartLoader] Last filtered: ${lastTs} (${new Date(lastTs).toISOString()})`);
+    } else {
+        console.warn(`[SmartLoader] ⚠️ No candles found in UTC range for ${targetDate}`);
+    }
+
+    return filtered;
 }
 
 /**
@@ -287,7 +395,8 @@ async function loadWarmupBuffer(
                 const ts = new Date(c.timestamp).getTime();
                 return ts < startDateMs; // Only candles BEFORE target date
             })
-            .map((raw: any) => normalizeCandle(raw, startDate));
+            .map((raw: any) => normalizeCandle(raw, startDate, data.metadata))
+            .filter((c: any): c is Candle => c !== null); // Filter out invalid candles
 
         // Take last N candles (most recent before startDate)
         const buffer = warmupCandles.slice(-warmupCount);

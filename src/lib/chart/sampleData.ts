@@ -69,16 +69,21 @@ export function toKLineData(candles: Candle[]): KLineData[] {
  * Sample ticker data for demo
  */
 export const SAMPLE_TICKERS = [
-    { symbol: 'AAPL', name: 'Apple Inc.', price: 185.50 },
-    { symbol: 'MSFT', name: 'Microsoft Corp.', price: 378.25 },
-    { symbol: 'GOOGL', name: 'Alphabet Inc.', price: 141.80 },
-    { symbol: 'AMZN', name: 'Amazon.com Inc.', price: 178.50 },
-    { symbol: 'TSLA', name: 'Tesla Inc.', price: 248.75 },
-    { symbol: 'NVDA', name: 'NVIDIA Corp.', price: 495.20 },
-    { symbol: 'BBCA', name: 'Bank Central Asia', price: 9875 },
-    { symbol: 'BBRI', name: 'Bank Rakyat Indonesia', price: 5925 },
-    { symbol: 'TLKM', name: 'Telkom Indonesia', price: 4150 },
-    { symbol: 'ASII', name: 'Astra International', price: 5425 },
+    { symbol: 'BBCA.JK', name: 'Bank Central Asia', price: 9875 },
+    { symbol: 'BBRI.JK', name: 'Bank Rakyat Indonesia', price: 5925 },
+    { symbol: 'TLKM.JK', name: 'Telkom Indonesia', price: 4150 },
+    { symbol: 'ASII.JK', name: 'Astra International', price: 5425 },
+    { symbol: 'BMRI.JK', name: 'Bank Mandiri', price: 7100 },
+    { symbol: 'ADRO.JK', name: 'Adaro Energy', price: 2380 },
+    { symbol: 'GOTO.JK', name: 'GoTo Gojek Tokopedia', price: 84 },
+    { symbol: 'UNTR.JK', name: 'United Tractors', price: 22450 },
+    { symbol: 'MDKA.JK', name: 'Merdeka Copper Gold', price: 2600 },
+    { symbol: 'BRPT.JK', name: 'Barito Pacific', price: 1040 },
+    { symbol: 'PGAS.JK', name: 'Perusahaan Gas Negara', price: 1140 },
+    { symbol: 'ANTM.JK', name: 'Aneka Tambang', price: 1650 },
+    { symbol: 'INDF.JK', name: 'Indofood Sukses Makmur', price: 6450 },
+    { symbol: 'ICBP.JK', name: 'Indofood CBP', price: 10900 },
+    { symbol: 'BBNI.JK', name: 'Bank Negara Indonesia', price: 5325 },
 ];
 
 /**

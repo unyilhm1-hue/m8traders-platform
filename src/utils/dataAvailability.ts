@@ -151,17 +151,25 @@ export async function scanDataDirectory(): Promise<Record<string, DataIndex>> {
 /**
  * Generate array of dates between start and end (inclusive)
  * Helper for MERGED file date range expansion
+ * 
+ * 🔥 FIX: Use UTC parsing to avoid timezone-dependent date shifts
+ * Metadata dates are in ISO 8601 format (YYYY-MM-DD), must be parsed as UTC
  */
 function generateDateRange(startDate: string, endDate: string): string[] {
     const dates: string[] = [];
-    const current = new Date(startDate);
-    const end = new Date(endDate);
+
+    // 🔥 FIX: Parse as UTC midnight to avoid local timezone shift
+    // "2025-12-19" → parseFixed datetime in UTC, not local
+    const current = new Date(startDate + 'T00:00:00Z');
+    const end = new Date(endDate + 'T00:00:00Z');
 
     while (current <= end) {
+        // Extract YYYY-MM-DD in UTC timezone
         dates.push(current.toISOString().split('T')[0]);
-        current.setDate(current.getDate() + 1);
+        current.setUTCDate(current.getUTCDate() + 1);
     }
 
+    console.log(`[DataScanner] Generated ${dates.length} dates from ${startDate} to ${endDate}`);
     return dates;
 }
 
@@ -180,19 +188,31 @@ export async function getAvailableIntervals(
     const index = await scanDataDirectory();
     const tickerData = index[ticker];
 
+    console.log(`[DataAvailability] getAvailableIntervals for ${ticker} on ${date}`);
+    console.log(`[DataAvailability] tickerData exists:`, !!tickerData);
+
     if (!tickerData) {
+        console.warn(`[DataAvailability] No index found for ticker: ${ticker}`);
         return [];
     }
+
+    console.log(`[DataAvailability] Available intervals for ${ticker}:`, tickerData.intervals.map(i => i.interval));
 
     const availableIntervals: IntervalType[] = [];
 
     for (const intervalEntry of tickerData.intervals) {
+        console.log(`[DataAvailability] Checking ${intervalEntry.interval}: has ${intervalEntry.dates.length} dates`);
+        console.log(`[DataAvailability] Date range: ${intervalEntry.dateRange.earliest} to ${intervalEntry.dateRange.latest}`);
+        console.log(`[DataAvailability] First 5 dates:`, intervalEntry.dates.slice(0, 5));
+        console.log(`[DataAvailability] Includes ${date}?`, intervalEntry.dates.includes(date));
+
         // Check if this interval has data for the target date
         if (intervalEntry.dates.includes(date)) {
             availableIntervals.push(intervalEntry.interval);
         }
     }
 
+    console.log(`[DataAvailability] Final available intervals for ${ticker} ${date}:`, availableIntervals);
     return sortIntervals(availableIntervals);
 }
 

@@ -20,7 +20,7 @@ export function CompactToolbar() {
     // Chart state (for ticker, timeframe, indicators only)
     const { ticker, timeframe, indicators, setTicker, setTimeframe, toggleIndicator } = useChartStore();
 
-    const indicatorRef = useRef<HTMLButtonElement>(null);
+    const indicatorRef = useRef<HTMLDivElement>(null);
     const [isIndicatorOpen, setIsIndicatorOpen] = useState(false);
     const [indicatorPos, setIndicatorPos] = useState({ top: 0, left: 0 });
 
@@ -99,48 +99,45 @@ export function CompactToolbar() {
                 {/* 🔥 MASTER BLUEPRINT: Dynamic Interval Buttons */}
                 <IntervalButtons />
 
-                {/* Indicators Dropdown (Portal implementation) */}
-                <div className="relative">
+                {/* Indicators Dropdown */}
+                <div className="relative" ref={indicatorRef}>
                     <button
-                        ref={indicatorRef}
                         onClick={() => setIsIndicatorOpen(!isIndicatorOpen)}
-                        className={`flex items-center gap-2 px-3 py-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-hover)] text-[var(--text-primary)] text-sm rounded transition-colors border ${isIndicatorOpen ? 'border-[var(--accent-primary)]' : 'border-transparent hover:border-[var(--bg-subtle-border)]'}`}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${isIndicatorOpen
+                            ? 'bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
+                            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+                            }`}
                     >
-                        <Layers size={14} className="text-[var(--text-secondary)]" />
+                        <Layers size={14} />
                         <span>Indicators</span>
-                        <Dropdown size={14} className="text-[var(--text-tertiary)]" />
+                        <Dropdown size={10} className={`transform transition-transform ${isIndicatorOpen ? 'rotate-180' : ''}`} />
                     </button>
 
                     {isIndicatorOpen && (
                         <Portal>
                             <div
                                 id="indicators-dropdown"
-                                className="fixed z-[9999] bg-[var(--bg-secondary)] border border-[var(--bg-subtle-border)] rounded-lg shadow-xl py-2 min-w-[200px] max-h-[60vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-100"
-                                style={{
-                                    top: indicatorPos.top - window.scrollY,
-                                    left: indicatorPos.left - window.scrollX
-                                }}
+                                className="fixed z-50 w-56 bg-[var(--bg-secondary)] border border-[var(--bg-subtle-border)] rounded-lg shadow-xl py-1 overflow-hidden animate-in fade-in zoom-in-95 duration-100"
+                                style={{ top: indicatorPos.top, left: indicatorPos.left }}
                             >
-                                {indicators.map((indicator) => (
-                                    <label
-                                        key={indicator.id}
-                                        className="flex items-center gap-3 px-4 py-2 hover:bg-[var(--bg-tertiary)] cursor-pointer text-sm transition-colors"
-                                    >
-                                        <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${indicator.enabled ? 'bg-[var(--accent-primary)] border-[var(--accent-primary)]' : 'border-[var(--text-secondary)]'}`}>
-                                            {indicator.enabled && <Check size={10} className="text-white" />}
-                                        </div>
-                                        <input
-                                            type="checkbox"
-                                            checked={indicator.enabled}
-                                            onChange={() => toggleIndicator(indicator.id)}
-                                            className="hidden"
-                                        />
-                                        <span className={indicator.enabled ? 'text-[var(--text-primary)] font-medium' : 'text-[var(--text-secondary)]'}>
-                                            {indicator.type}
-                                            {indicator.period ? ` (${indicator.period})` : ''}
-                                        </span>
-                                    </label>
-                                ))}
+                                <div className="px-3 py-2 border-b border-[var(--bg-subtle-border)] bg-[var(--bg-tertiary)]/30">
+                                    <h3 className="text-xs font-bold text-[var(--text-primary)]">Favorites</h3>
+                                </div>
+                                <div className="max-h-64 overflow-y-auto p-1">
+                                    {indicators.slice(0, 10).map((ind) => (
+                                        <button
+                                            key={ind.id}
+                                            onClick={() => toggleIndicator(ind.id)}
+                                            className={`
+                                                w-full text-left px-2 py-1.5 rounded text-xs flex items-center justify-between group
+                                                ${ind.enabled ? 'bg-[var(--accent-primary)]/10 text-[var(--accent-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'}
+                                            `}
+                                        >
+                                            <span>{ind.id.toUpperCase()}</span>
+                                            {ind.enabled && <Check size={12} />}
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
                         </Portal>
                     )}

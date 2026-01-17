@@ -445,9 +445,13 @@ export function getAvailableIntervals(
     // 🔥 FIX: Expose all supported intervals including 1h/4h/1d
     const intervals: Interval[] = ['1m', '2m', '5m', '15m', '30m', '60m', '1h', '4h', '1d'];
 
+    // 🔥 FIX: Normalize input candles once to ensure {time} field exists
+    // This handles mixed data sources (Worker {t} vs Store {time})
+    const normalized = normalizeCandles(baseCandles);
+
     return intervals.map(interval => {
         const compatible = isCompatible(baseInterval, interval);
-        const sufficient = canSwitch(baseCandles, baseInterval, interval);
+        const sufficient = canSwitch(normalized, baseInterval, interval);
         const enabled = compatible && sufficient;
 
         let reason: string | undefined;
@@ -455,7 +459,7 @@ export function getAvailableIntervals(
             reason = `Incompatible with ${baseInterval} base data`;
         } else if (!sufficient) {
             const potential = Math.floor(
-                (baseCandles.length * intervalToMinutes(baseInterval)) /
+                (normalized.length * intervalToMinutes(baseInterval)) /
                 intervalToMinutes(interval)
             );
             reason = `Insufficient data (need 10+ candles, would produce ${potential})`;

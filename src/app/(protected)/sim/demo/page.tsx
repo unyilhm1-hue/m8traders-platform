@@ -12,7 +12,7 @@ import { PositionDisplay, PendingOrders } from '@/components/trading';
 import { EnhancedOrderPanel } from '@/components/trading/EnhancedOrderPanel';
 import { MarketDataPanel } from '@/components/market/MarketDataPanel';
 import { PerformanceStats, TradeHistory } from '@/components/analytics';
-import { useTradingStore } from '@/stores';
+import { useTradingStore, useChartStore } from '@/stores';
 import { SimulationEngineProvider, useSimulationEngineContext } from '@/contexts/SimulationEngineContext';
 import { useCurrentPrice, useSimulationStore } from '@/stores/useSimulationStore';
 import { formatPrice, formatIDR } from '@/lib/format';
@@ -42,13 +42,16 @@ function SimDemoPageContent() {
     // ✅ Track initialization to prevent loop
     const hasInitialized = useRef(false);
 
-    // 🔥 DYNAMIC: Auto-detect available ticker and date from data
-    const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
-    const [targetDate, setTargetDate] = useState<string | null>(null);
-    const [availableIntervals, setAvailableIntervals] = useState<string[]>(['1m']);
-
     // ✅ Subscribe to real-time price from simulation store
     const currentPrice = useCurrentPrice();
+
+    // 🔥 STATE MIGRATION: Use ChartStore as Single Source of Truth
+    // Alias to match existing variable names for minimal refactor impact
+    const { ticker: selectedTicker, setTicker: setSelectedTicker } = useChartStore();
+
+    // Restore missing local state for Data Loading
+    const [targetDate, setTargetDate] = useState<string | null>(null);
+    const [availableIntervals, setAvailableIntervals] = useState<string[]>(['1m']);
 
     // 🚀 AUTO-DETECT AVAILABLE TICKER & DATE FROM DATA
     useEffect(() => {
@@ -59,17 +62,19 @@ function SimDemoPageContent() {
                 const response = await fetch('/api/simulation/tickers');
                 const result = await response.json();
 
-                if (!result.success || !result.data?.tickers?.length) {
+                if (!result.success || !result.tickers?.length) {
                     console.error('[SimDemoPage] No tickers available');
                     return;
                 }
 
                 // Select first available ticker
-                const firstTicker = result.data.tickers[0];
+                const firstTicker = result.tickers[0];
                 console.log('[SimDemoPage] Auto-selected ticker:', firstTicker.ticker);
 
-                setSelectedTicker(firstTicker.ticker);
-                setAvailableIntervals(firstTicker.intervals || ['1m']);
+                // Only update if currently default/empty to respect manual selection
+                if (!selectedTicker || selectedTicker === 'BTCUSD') {
+                    setSelectedTicker(firstTicker.ticker);
+                }
 
                 // Extract latest available date from metadata
                 if (firstTicker.metadata?.data_end) {
@@ -89,13 +94,13 @@ function SimDemoPageContent() {
             } catch (err) {
                 console.error('[SimDemoPage] Error detecting available data:', err);
                 // Fallback to defaults
-                setSelectedTicker('ADRO');
+                if (!selectedTicker) setSelectedTicker('ADRO');
                 setTargetDate('2026-01-14');
             }
         };
 
         detectAvailableData();
-    }, []); // Run once on mount
+    }, []); // Run once on mount (updates store if needed)
 
     // 🚀 AUTO-LOAD DATA ON PAGE MOUNT WITH SMART BUFFERING
     useEffect(() => {

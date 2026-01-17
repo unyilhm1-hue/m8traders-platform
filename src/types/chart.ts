@@ -66,6 +66,7 @@ export type IndicatorType =
     | 'trix'
     // Volume
     // Note: vwap removed - will be implemented as custom indicator
+    | 'volume'
     | 'obv'
     | 'vr'; // Volume Ratio
 
