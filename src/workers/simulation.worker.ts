@@ -850,11 +850,22 @@ class SimulationEngine {
 
         // Filter lunch break
         const beforeFilter = validatedCandles.length;
-        this.candles = validatedCandles.filter(c => !isLunchBreak(c.t, this.marketConfig));
+
+        // 🔥 FIX #10: Filter market hours AND lunch break for legacy mode
+        this.candles = validatedCandles.filter(c => {
+            if (!isWithinMarketHours(c.t, this.marketConfig)) {
+                return false;
+            }
+            if (isLunchBreak(c.t, this.marketConfig)) {
+                return false;
+            }
+            return true;
+        });
+
         const skippedCount = beforeFilter - this.candles.length;
 
         if (skippedCount > 0) {
-            console.log(`[SimWorker] ⏭️ Skipped ${skippedCount} lunch break candles`);
+            console.log(`[SimWorker] ⏭️ Skipped ${skippedCount} non-market hours or lunch break candles`);
         }
 
         console.log(`[SimWorker] ✅ Processing ${this.candles.length} valid candles`);

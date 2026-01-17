@@ -77,7 +77,9 @@ export function normalizeCandles(candles: any[]): Candle[] {
 
 /**
  * Interval compatibility matrix
- * Key: source interval, Value: compatible target intervals
+ * Defines which intervals can be resampled to which target intervals
+ * 
+ * 🔥 FIX #18: Added 60m as alias for 1h for compatibility
  */
 export const INTERVAL_COMPATIBILITY: Record<Interval, Interval[]> = {
     '1m': ['1m', '2m', '5m', '15m', '30m', '60m', '1h', '4h', '1d'],  // Universal
@@ -85,21 +87,26 @@ export const INTERVAL_COMPATIBILITY: Record<Interval, Interval[]> = {
     '5m': ['5m', '15m', '30m', '60m', '1h', '4h', '1d'],              // Multiples of 5
     '15m': ['15m', '30m', '60m', '1h', '4h', '1d'],                    // Multiples of 15
     '30m': ['30m', '60m', '1h', '4h', '1d'],                           // Multiples of 30
-    '60m': ['60m', '1h', '4h', '1d'],                                  // Multiples of 60
-    '1h': ['1h', '4h', '1d'],                                          // Hourly intervals
+    '60m': ['60m', '1h', '4h', '1d'],                                  // 🔥 FIX #18: 60m as valid source
+    '1h': ['60m', '1h', '4h', '1d'],                                   // 🔥 FIX #18: Can resample to 60m
     '4h': ['4h', '1d'],                                                // 4-hour intervals
     '1d': ['1d']                                                       // Daily only
 };
 
 /**
  * Convert interval string to minutes
- * Supports: m (minutes), h (hours), d (days)
+ * 🔥 FIX #18: Handle both 60m and 1h
  */
 export function intervalToMinutes(interval: Interval): number {
-    const value = parseInt(interval);
-    if (interval.endsWith('m')) return value;
-    if (interval.endsWith('h')) return value * 60;
-    if (interval.endsWith('d')) return value * 1440;
+    const match = interval.match(/^(\d+)([mhd])$/);
+    if (!match) return 60;
+
+    const value = parseInt(match[1]);
+    const unit = match[2];
+
+    if (unit === 'm') return value;
+    if (unit === 'h') return value * 60;
+    if (unit === 'd') return value * 1440;
     return value * 60; // Default to hours for backward compatibility
 }
 
@@ -368,22 +375,24 @@ function aggregateBucket(bucket: Candle[], expectedCount?: number): ResampledCan
 }
 
 /**
- * Resample candles from source interval to target interval
+ * Resample candles to a coarser interval
+ * 🔥 FIX #21: Added includePartial option to include incomplete buckets
  * 
- * @param sourceCandles - Source candles to resample
+ * @param candles - Source candles (normalized)
  * @param sourceInterval - Source interval (e.g., '1m')
  * @param targetInterval - Target interval (e.g., '5m')
+ * @param includePartial - Include incomplete buckets with metadata (default: false)
  * @returns Resampled candles with metadata
- * @throws {Error} If intervals are incompatible or insufficient data
  */
 export function resampleCandles(
-    sourceCandles: Candle[],
+    candles: Candle[],
     sourceInterval: Interval,
-    targetInterval: Interval
+    targetInterval: Interval,
+    includePartial: boolean = false
 ): ResampledCandle[] {
     // 🔥 FIX: Auto-normalize input to ensure consistent format
     // Handles both {t,o,h,l,c,v} and {time,open,high,low,close,volume} formats
-    const normalized = normalizeCandles(sourceCandles);
+    const normalized = normalizeCandles(candles);
 
     // Validation
     if (!isCompatible(sourceInterval, targetInterval)) {
