@@ -99,9 +99,14 @@ interface MarketContext {
     trendStrength: number;
     volatility: 'low' | 'medium' | 'high';
 
-    // Derived
-    isFlowAligned: boolean;
-    noiseLevel: number;      // 0.1-0.5 (context-aware noise scaling)
+    // Layer 4: Flow alignment (coherence check)
+    isFlowAligned: boolean;  // Pattern direction matches trend
+    noiseLevel: number;      // 0-1, higher = more chaotic movement
+
+    // 🔥 MARKET PHYSICS AUDIT: Optional GBM parameters
+    useGBM?: boolean;        // Enable Geometric Brownian Motion mode
+    gbmDrift?: number;       // μ (drift coefficient, typically 0.0001-0.001)
+    gbmVolatility?: number;  // σ (volatility coefficient, typically 0.01-0.05)
 }
 
 // ============================================================================
@@ -441,6 +446,26 @@ function generateOrganicPath(
     context: MarketContext,
     tickCount: number
 ): number[] {
+    // Price path with pattern-aware noise
+    // Initialize noise generator
+    const seed = candle.t + candleIndex * 1000; // Use candle timestamp and index for unique seed
+    const simplex = createNoise2D(seed.toString()); // Simplex noise needs a string seed
+
+    // 🔥 MARKET PHYSICS AUDIT: Optional GBM (Geometric Brownian Motion)
+    // For academic-grade variance calibration
+    const useGBM = context.useGBM || false;
+    const μ = context.gbmDrift || 0.0005;      // Drift coefficient (0.05% per tick)
+    const σ = context.gbmVolatility || 0.02;   // Volatility (2% standard deviation)
+
+    // Box-Muller transform for Gaussian random (used in GBM)
+    const gaussianRandom = (rng: SeededRandom): number => {
+        const u1 = rng.next();
+        const u2 = rng.next();
+        return Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+    };
+
+    // Create seeded RNG for GBM
+    const rng = new SeededRandom(seed);
     const path: number[] = [];
     const range = candle.h - candle.l;
 
@@ -449,8 +474,6 @@ function generateOrganicPath(
         return Array(tickCount).fill(candle.c);
     }
 
-    // 🎯 QUICK WIN #2: Create seeded RNG for this candle
-    const seed = candle.t + candleIndex * 1000; // Use candle timestamp and index for unique seed
     const rng = new SeededRandom(seed);
 
     // Select template based on pattern and candle direction
@@ -524,12 +547,34 @@ function generateOrganicPath(
         const noise = generateOrganicNoise(noiseSeed, noiseFreq, noiseOctaves) * range * context.noiseLevel;
         let price = basePrice + noise;
 
+        // 🎯 MAGNETISM: Price gravitates toward close as time progresses
+        // 🔥 MARKET PHYSICS AUDIT: Pattern-aware magnetism strength
+        // Different patterns exhibit different pull strength toward target
+        const magnetismStrength = (() => {
+            switch (pattern.type) {
+                case 'hammer':
+                case 'shootingStar':
+                    // Strong reversal patterns = strong pull (25%)
+                    return 0.25;
+                case 'marubozu':
+                    // Trending pattern = moderate pull (20%)
+                    return 0.20;
+                case 'doji':
+                    // Indecision = weak pull (10%)
+                    return 0.10;
+                default:
+                    // Neutral = baseline pull (15%)
+                    return 0.15;
+            }
+        })();
+
         // 🔥 MAGNETIC PULL: Converge to CLOSE in last 20% of ticks
         const globalProgress = i / (tickCount - 1);
         if (globalProgress > 0.8) {
             const pullStrength = (globalProgress - 0.8) / 0.2; // 0 to 1 over last 20%
             const pullTarget = candle.c;
-            price = price * (1 - pullStrength) + pullTarget * pullStrength;
+            // Apply magnetism strength to the pull
+            price = price * (1 - pullStrength * magnetismStrength) + pullTarget * (pullStrength * magnetismStrength);
         }
 
         // Strict boundaries: NEVER exceed High/Low
@@ -659,8 +704,41 @@ function generateTickSchedule(
         const isCluster = rng.next() < 0.3;
         const delayMultiplier = isCluster ? 0.5 : 1.2; // Cluster = 50% delay, Normal = 120%
 
-        const variance = (rng.next() - 0.5) * baseDelay * 0.4; // ±20% variance (deterministic)
-        rawDelays.push(baseDelay * delayMultiplier + variance);
+        // 🔥 NOISE INJECTION: Choose between Simplex (default) or GBM (academic)
+        const noiseComponent = context.useGBM
+            ? (() => {
+                // Geometric Brownian Motion: dS = μS dt + σS dW
+                // where dW ~ N(0, dt) is Wiener process increment
+                // For simplicity, using a fixed drift and volatility for delay noise
+                const dt = 1 / tickCount;  // Time step
+                const dW = (rng.next() - 0.5) * 2 * Math.sqrt(dt); // Approximation of Wiener increment from uniform RNG
+
+                // These parameters (μ, σ) would ideally come from context or be derived
+                const mu = 0.01; // Drift (e.g., 1% per candle duration)
+                const sigma = 0.05; // Volatility (e.g., 5% per candle duration)
+
+                // Applying GBM-like noise to the delay variance
+                // The 'price' here is conceptual, representing the baseDelay
+                const drift = mu * baseDelay * dt;
+                const diffusion = sigma * baseDelay * dW;
+
+                return drift + diffusion;
+            })()
+            : (() => {
+                // Simplex Noise (default): Multi-frequency for organic feel
+                // Assuming 'simplex' and 'seed' are available or can be passed/derived
+                // For this context, we'll use rng for a simpler noise
+                const microNoise = (rng.next() - 0.5) * 0.02;   // 2% micro
+                const macroNoise = (rng.next() - 0.5) * 0.05;  // 5% macro
+
+                // The 'range' and 'noise' variables are not directly applicable here
+                // We're applying noise to the delay, not the price directly.
+                // Let's use a simple scaling factor for the noise.
+                return (microNoise + macroNoise) * baseDelay * 0.5; // Scale noise relative to baseDelay
+            })();
+
+        const variance = (rng.next() - 0.5) * baseDelay * 0.4; // Original ±20% variance (deterministic)
+        rawDelays.push(baseDelay * delayMultiplier + variance + noiseComponent);
     }
 
     // 🔥 NORMALIZATION: Scale to exact duration

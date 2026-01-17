@@ -189,7 +189,21 @@ export async function loadWithBuffer(config: BufferConfig): Promise<CachedData> 
     }
 
     const data = await response.json();
+
+    // 🔥 MARKET PHYSICS AUDIT: Validate MERGED file has metadata
+    // Prevents loading raw/fragmented files that lack proper structure
+    if (!data.metadata) {
+        throw new Error(
+            `File ${mergedFilename} is missing metadata key - not a valid MERGED file. ` +
+            `MERGED files must contain {candles: [], metadata: {...}} structure.`
+        );
+    }
+
     const allCandles: Candle[] = Array.isArray(data) ? data : data.candles || [];
+
+    if (allCandles.length === 0) {
+        console.warn(`[SmartBuffer] ⚠️ MERGED file ${mergedFilename} contains no candles`);
+    }
 
     // 🔥 FIX #24: Sort candles by time before split to handle unsorted input
     const sorted = allCandles.sort((a, b) => {
