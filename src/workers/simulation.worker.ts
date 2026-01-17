@@ -722,41 +722,8 @@ function generateTickSchedule(
         const isCluster = rng.next() < 0.3;
         const delayMultiplier = isCluster ? 0.5 : 1.2; // Cluster = 50% delay, Normal = 120%
 
-        // 🔥 NOISE INJECTION: Choose between Simplex (default) or GBM (academic)
-        const noiseComponent = context.useGBM
-            ? (() => {
-                // Geometric Brownian Motion: dS = μS dt + σS dW
-                // where dW ~ N(0, dt) is Wiener process increment
-                // For simplicity, using a fixed drift and volatility for delay noise
-                const dt = 1 / tickCount;  // Time step
-                const dW = (rng.next() - 0.5) * 2 * Math.sqrt(dt); // Approximation of Wiener increment from uniform RNG
-
-                // These parameters (μ, σ) would ideally come from context or be derived
-                const mu = 0.01; // Drift (e.g., 1% per candle duration)
-                const sigma = 0.05; // Volatility (e.g., 5% per candle duration)
-
-                // Applying GBM-like noise to the delay variance
-                // The 'price' here is conceptual, representing the baseDelay
-                const drift = mu * baseDelay * dt;
-                const diffusion = sigma * baseDelay * dW;
-
-                return drift + diffusion;
-            })()
-            : (() => {
-                // Simplex Noise (default): Multi-frequency for organic feel
-                // Assuming 'simplex' and 'seed' are available or can be passed/derived
-                // For this context, we'll use rng for a simpler noise
-                const microNoise = (rng.next() - 0.5) * 0.02;   // 2% micro
-                const macroNoise = (rng.next() - 0.5) * 0.05;  // 5% macro
-
-                // The 'range' and 'noise' variables are not directly applicable here
-                // We're applying noise to the delay, not the price directly.
-                // Let's use a simple scaling factor for the noise.
-                return (microNoise + macroNoise) * baseDelay * 0.5; // Scale noise relative to baseDelay
-            })();
-
         const variance = (rng.next() - 0.5) * baseDelay * 0.4; // Original ±20% variance (deterministic)
-        rawDelays.push(baseDelay * delayMultiplier + variance + noiseComponent);
+        rawDelays.push(baseDelay * delayMultiplier + variance);
     }
 
     // 🔥 NORMALIZATION: Scale to exact duration
