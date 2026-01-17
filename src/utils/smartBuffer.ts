@@ -172,10 +172,17 @@ export async function loadWithBuffer(config: BufferConfig): Promise<CachedData> 
         return cached;
     }
 
-    console.log(`📥 Loading data: ${ticker} ${baseInterval} (buffer: ${bufferSize})`);
+    console.log(`[SmartBuffer] 📥 Loading data: ${ticker} ${baseInterval} (buffer: ${bufferSize})`);
 
-    // Fetch data from API (use consolidated files)
-    const response = await fetch(`/simulation-data/${ticker}_${baseInterval}_*.json`);
+    // 🔥 FIX #15: Use specific MERGED file path instead of wildcard
+    // Wildcard fetches are unreliable and can cause 404 on first load
+    const mergedFilename = `${ticker}_${baseInterval}_MERGED.json`;
+    const mergedPath = `/simulation-data/${mergedFilename}`;
+
+    console.log(`[SmartBuffer] 🔍 Fetching: ${mergedPath}`);
+
+    // Fetch data from API (use MERGED files)
+    const response = await fetch(mergedPath);
 
     if (!response.ok) {
         throw new Error(`Failed to load data for ${ticker} ${baseInterval}`);

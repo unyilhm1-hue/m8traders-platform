@@ -300,6 +300,31 @@ export async function GET(request: Request) {
 
         console.log(`[API/Start] Requested interval: ${requestedInterval} (${expectedIntervalMs}ms)`);
 
+        /**
+         * Deduplicate candles while maintaining interval grid alignment
+         * 🔥 FIX #13: Snap to interval grid instead of +1ms
+         */
+        function deduplicateCandles(candles: any[], intervalMinutes: number): any[] {
+            const intervalMs = intervalMinutes * 60 * 1000;
+            const seen = new Set<number>();
+
+            return candles.filter(candle => {
+                // Use the 't' property for timestamp if it's already processed,
+                // otherwise, assume 'time' property and parse it.
+                const timestamp = candle.t || new Date(candle.time).getTime();
+
+                // Snap to interval grid (e.g., 1m = :00, :01, :02...)
+                const snappedTime = Math.floor(timestamp / intervalMs) * intervalMs;
+
+                if (seen.has(snappedTime)) {
+                    // Duplicate on same grid point - skip it
+                    return false;
+                }
+
+                seen.add(snappedTime);
+                return true;
+            });
+        }
         // ✅ FIX 1: Detect if data already has correct interval spacing
         // This prevents double-adjustment when time-only data is already properly spaced
         const detectInterval = (candles: any[], expectedMs: number, dateStr: string): boolean => {
