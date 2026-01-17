@@ -447,25 +447,6 @@ function generateOrganicPath(
     tickCount: number
 ): number[] {
     // Price path with pattern-aware noise
-    // Initialize noise generator
-    const seed = candle.t + candleIndex * 1000; // Use candle timestamp and index for unique seed
-    const simplex = createNoise2D(seed.toString()); // Simplex noise needs a string seed
-
-    // 🔥 MARKET PHYSICS AUDIT: Optional GBM (Geometric Brownian Motion)
-    // For academic-grade variance calibration
-    const useGBM = context.useGBM || false;
-    const μ = context.gbmDrift || 0.0005;      // Drift coefficient (0.05% per tick)
-    const σ = context.gbmVolatility || 0.02;   // Volatility (2% standard deviation)
-
-    // Box-Muller transform for Gaussian random (used in GBM)
-    const gaussianRandom = (rng: SeededRandom): number => {
-        const u1 = rng.next();
-        const u2 = rng.next();
-        return Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
-    };
-
-    // Create seeded RNG for GBM
-    const rng = new SeededRandom(seed);
     const path: number[] = [];
     const range = candle.h - candle.l;
 
@@ -474,7 +455,22 @@ function generateOrganicPath(
         return Array(tickCount).fill(candle.c);
     }
 
+    // 🎯 QUICK WIN #2: Create seeded RNG for this candle
+    const seed = candle.t + candleIndex * 1000;
     const rng = new SeededRandom(seed);
+
+    // 🔥 MARKET PHYSICS AUDIT: Optional GBM (Geometric Brownian Motion)
+    // For academic-grade variance calibration
+    const useGBM = context.useGBM || false;
+    const μ = context.gbmDrift || 0.0005;      // Drift coefficient (0.05% per tick)
+    const σ = context.gbmVolatility || 0.02;   // Volatility (2% standard deviation)
+
+    // Box-Muller transform for Gaussian random (used in GBM)
+    const gaussianRandom = (): number => {
+        const u1 = rng.next();
+        const u2 = rng.next();
+        return Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+    };
 
     // Select template based on pattern and candle direction
     let selectedTemplate: PathTemplate;
@@ -542,10 +538,32 @@ function generateOrganicPath(
 
         // Context-aware noise parameters
         const noiseFreq = context.volatility === 'high' ? 1.5 : context.volatility === 'low' ? 0.7 : 1.0;
-        const noiseOctaves = context.isFlowAligned ? 2 : 3; // Aligned = smooth (2 octaves), Conflicted = choppy (3 octaves)
+        // 🔥 NOISE INJECTION: Choose between GBM or Simplex noise
+        const noiseComponent = useGBM
+            ? (() => {
+                // Geometric Brownian Motion: dS = μS dt + σS dW
+                const dt = 1 / tickCount;  // Time step
+                const dW = gaussianRandom() * Math.sqrt(dt);  // Wiener increment
 
-        const noise = generateOrganicNoise(noiseSeed, noiseFreq, noiseOctaves) * range * context.noiseLevel;
-        let price = basePrice + noise;
+                // GBM is multiplicative, so drift and diffusion are applied to the current price
+                // For noise, we want a deviation from the basePrice
+                // A common simplification for GBM noise is to return a value that is added to the current price.
+                // Here, we'll calculate the change in price (dP) based on GBM.
+                const drift = μ * basePrice * dt;
+                const diffusion = σ * basePrice * dW;
+
+                return drift + diffusion;
+            })()
+            : (() => {
+                // Simplex Noise (default): Multi-frequency for organic feel
+                // Use the existing noiseSeed and context-aware noiseFreq/Octaves
+                const noiseOctaves = context.isFlowAligned ? 2 : 3; // Aligned = smooth (2 octaves), Conflicted = choppy (3 octaves)
+                const noise = generateOrganicNoise(noiseSeed, noiseFreq, noiseOctaves) * range * context.noiseLevel;
+
+                return noise;
+            })();
+
+        let price = basePrice + noiseComponent;
 
         // 🎯 MAGNETISM: Price gravitates toward close as time progresses
         // 🔥 MARKET PHYSICS AUDIT: Pattern-aware magnetism strength
