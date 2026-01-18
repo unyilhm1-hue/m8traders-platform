@@ -27,6 +27,10 @@ interface TradingChartProps {
 
 // 1. Bungkus memo agar tidak re-render oleh Parent
 const TradingChartInner = memo(function TradingChartInner({ className = '' }: TradingChartProps) {
+    const renderInterval = useSimulationStore((s) => s.baseInterval);
+    const renderHistory = useSimulationStore((s) => s.candleHistory.length);
+    console.log(`[TradingChart] 🔄 RENDER COMPONENT. Interval: ${renderInterval}, HistLen: ${renderHistory}`);
+
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const mainChartRef = useRef<IChartApi | null>(null);
     const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -210,8 +214,14 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
 
     // --- B. HISTORY LOADING EFFECT (Load Chart Data) ---
     useEffect(() => {
-        if (!candleHistory || candleHistory.length === 0) return;
-        if (!candleSeriesRef.current || !mainChartRef.current) return;
+        if (!candleHistory || candleHistory.length === 0) {
+            console.warn('[Chart] ⚠️ Skip load: No history data');
+            return;
+        }
+        if (!candleSeriesRef.current || !mainChartRef.current) {
+            console.error('[Chart] ❌ Skip load: Series/Chart ref missing');
+            return;
+        }
 
         const lastCandleTime = candleHistory[candleHistory.length - 1]?.time;
         const total = candleHistory.length;
@@ -257,6 +267,10 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
 
         try {
             console.log(`[Chart] 📥 Loading History (${candleHistory.length} candles, interval: ${currentInterval})...`);
+
+            // 🔥 LOCK: Block updates while loading history
+            isChartReady.current = false;
+            pendingUpdateRef.current = null; // Kill ghosts
             lastUpdateTimeRef.current = 0;
 
             // 🔥 PERFORMANCE: Windowed setData for large datasets
@@ -353,6 +367,13 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
 
             candleSeriesRef.current.setData(candleData);
 
+            // 🔥 SYNC: Update lastUpdateTimeRef to Head of History
+            // This ensures flushUpdate knows the actual last timestamp
+            if (candleData.length > 0) {
+                const lastCandle = candleData[candleData.length - 1];
+                lastUpdateTimeRef.current = lastCandle.time as number;
+            }
+
             // 🔥 CRITICAL: Mark chart as ready AFTER data is loaded
             isChartReady.current = true;
             console.log('[Chart] ✅ Chart ready. Updates now allowed.');
@@ -375,12 +396,15 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
             const isFirstLoad = historyLoadedRef.current === 0;
 
             if (isAtLiveEdgeRef.current || isFirstLoad) {
-                const lookback = getSmartLookback(currentInterval);
+                // 🔥 ZOOM FIX: Default to 100 candles (TradingView standard)
+                // Prevents "Too Zoomed In" effect on load
+                const visibleCandlesCount = 100;
                 const total = candleHistory.length;
-                if (total > lookback) {
+
+                if (total > visibleCandlesCount) {
                     mainChartRef.current.timeScale().setVisibleLogicalRange({
-                        from: total - lookback,
-                        to: total - 1
+                        from: total - visibleCandlesCount,
+                        to: total + 5 // Add some space to the right
                     });
                 } else {
                     mainChartRef.current.timeScale().fitContent();
@@ -395,12 +419,17 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
 
         } catch (error) {
             console.error('[Chart] History Load Error:', error);
+            // 🔥 UNLOCK ON ERROR: Don't leave chart frozen
+            isChartReady.current = true;
         }
-    }, [candleHistory]);
+    }, [candleHistory, currentInterval]); // 🔥 Added currentInterval dependency
 
     // --- B2. INTERVAL CHANGE ---
     const baseInterval = useSimulationStore((state) => state.baseInterval);
     useEffect(() => {
+        // 🔥 IMMEDIATE KILL SWITCH: When interval changes, stop accepting updates
+        isChartReady.current = false;
+        pendingUpdateRef.current = null;
         lastUpdateTimeRef.current = 0;
     }, [baseInterval]);
 
@@ -409,7 +438,8 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
         let rafId: number | null = null;
         const flushUpdate = () => {
             rafId = null;
-            if (!pendingUpdateRef.current || !candleSeriesRef.current) return;
+            // 🔥 GUARD: Block updates if chart is not ready or paused
+            if (!isChartReady.current || !pendingUpdateRef.current || !candleSeriesRef.current) return;
             const update = pendingUpdateRef.current;
 
             // 🔥 DEFENSIVE: Verify timestamp is strictly a number
@@ -434,6 +464,15 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
 
             // 🔥 NO TIMESTAMP VALIDATION: Store bucket logic handles this!
             // Bucket logic ensures timestamps are always correct for current interval
+
+            // 🔥 DEFENSIVE OVERLAP CHECK
+            // If update time < last successfully updated time, IGNORE IT.
+            // We allow == (Same Time) because it means updating/repainting the current candle.
+            if (lastUpdateTimeRef.current > 0 && update.time < lastUpdateTimeRef.current) {
+                console.warn(`[Chart] 🛡️ Ignoring past update: ${update.time} < ${lastUpdateTimeRef.current}. Skipping.`);
+                pendingUpdateRef.current = null;
+                return;
+            }
 
             try {
                 console.log('[Chart] 🔄 Attempting update:', {

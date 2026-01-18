@@ -27,6 +27,7 @@ interface WorkerMessage {
     historyBuffer?: EnrichedCandle[];
     simulationQueue?: EnrichedCandle[];
     interval?: string;
+    epoch?: number; // 🔥 Session ID
 
     // Scenario Load
     scenarioId?: string;
@@ -88,6 +89,7 @@ class SimulationEngine {
     private currentAggregatedCandle: any = null;
     private currentIntervalStr: string = '1m';
     private lastCandleUpdateTime: number = 0;
+    private currentEpoch: number = 0; // 🔥 Epoch Logic
 
     // Metrics
     private averageVolume: number = 1;
@@ -109,10 +111,11 @@ class SimulationEngine {
     /**
      * INIT: Receives Clean Data from Main Thread (courtesy of Worker A)
      */
-    init(history: EnrichedCandle[], simulation: EnrichedCandle[], interval: string) {
+    init(history: EnrichedCandle[], simulation: EnrichedCandle[], interval: string, epoch: number) {
         this.historyBuffer = history;
         this.candles = simulation;
         this.currentIntervalStr = interval;
+        this.currentEpoch = epoch || 0; // 🔥 Store Epoch
 
         this.log('info', `[PhysicsWorker] 📥 Received ${history.length} History + ${simulation.length} Sim Candles`);
 
@@ -232,7 +235,7 @@ class SimulationEngine {
     // CORE LOGIC
     // ------------------------------------------------------------------------
 
-    private startTickLoop() {
+    private startTickLoopLegacy() {
         if (!this.candles[this.currentCandleIndex]) return;
         this.stopTickLoop();
 
@@ -386,6 +389,7 @@ class SimulationEngine {
             type: 'TICK',
             data: {
                 price: tick.price,
+                epoch: this.currentEpoch, // 🔥 Pass Epoch
                 volume: tick.volume,
                 timestamp: Math.floor(timestamp),
                 candleIndex: this.currentCandleIndex,
@@ -457,8 +461,90 @@ class SimulationEngine {
         postMessage({
             type: 'CANDLE_UPDATE',
             candle: this.currentAggregatedCandle,
+            epoch: this.currentEpoch, // 🔥 Pass Epoch
             source
         });
+    }
+    // ------------------------------------------------------------------------
+    // NEW SIMULATION LOGIC (Stateful Worker)
+    // ------------------------------------------------------------------------
+
+    private startTickLoop() {
+        if (!this.candles[this.currentCandleIndex]) return;
+        this.stopTickLoop();
+
+        const candle = this.candles[this.currentCandleIndex];
+
+        // 1. Generate Smooth Price Path
+        const pricePath = this.generatePricePath(candle);
+
+        // 2. Map to TickSchedule
+        const intervalMap: Record<string, number> = {
+            '1m': 60000, '5m': 300000, '15m': 900000, '30m': 1800000,
+            '1h': 3600000, '60m': 3600000, '4h': 14400000, '1d': 86400000
+        };
+        const durationMs = intervalMap[this.currentIntervalStr] || 60000;
+
+        // Ensure at least 1 tick
+        const tickCount = Math.max(1, pricePath.length);
+        const tickDuration = durationMs / tickCount;
+
+        // Volume distribution
+        const volPerTick = Math.floor(candle.v / tickCount);
+
+        this.tickSchedule = pricePath.map((price, i) => ({
+            tickIndex: i,
+            targetTime: i * tickDuration,
+            price: roundToIDXTickSize(price),
+            volume: volPerTick
+        }));
+
+        // 🔥 STATEFUL MEMORY RESET (High/Low tracking)
+        this.currentAggregatedCandle = {
+            time: Math.floor(candle.t / 1000),
+            open: candle.o,
+            high: candle.o, // Start at Open
+            low: candle.o,  // Start at Open
+            close: candle.o,
+            v: 0
+        };
+
+        this.currentTickIndex = 0;
+        this.candleStartTime = performance.now();
+
+        // 4. Start Polling
+        this.tickIntervalHandle = setInterval(() => this.poll(), 16);
+    }
+
+    private generatePricePath(candle: EnrichedCandle): number[] {
+        const { o, h, l, c } = candle;
+        let path: number[] = [];
+
+        // Helper: Linear Interpolation
+        const interpolate = (start: number, end: number, steps: number) => {
+            const p: number[] = [];
+            const stepSize = (end - start) / steps;
+            for (let i = 1; i <= steps; i++) {
+                p.push(start + (stepSize * i));
+            }
+            return p;
+        };
+
+        // Case 1: Green Candle (O -> L -> H -> C)
+        if (c >= o) {
+            path = path.concat(interpolate(o, l, 5));  // Dip
+            path = path.concat(interpolate(l, h, 10)); // Rise
+            path = path.concat(interpolate(h, c, 5));  // Close
+        }
+        // Case 2: Red Candle (O -> H -> L -> C)
+        else {
+            path = path.concat(interpolate(o, h, 5));  // Rise
+            path = path.concat(interpolate(h, l, 10)); // Dip
+            path = path.concat(interpolate(l, c, 5));  // Close
+        }
+
+        // Filter duplicates
+        return path.filter((item, pos, arr) => !pos || Math.abs(item - arr[pos - 1]) > Number.EPSILON);
     }
 }
 
@@ -477,7 +563,8 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
                 engine.init(
                     event.data.historyBuffer,
                     event.data.simulationQueue,
-                    event.data.interval || '1m'
+                    event.data.interval || '1m',
+                    event.data.epoch || 0 // 🔥 Pass Epoch
                 );
             } else if (event.data.candles && event.data.candles.length > 0) {
                 // Legacy support: Treat all candles as simulation queue, empty history
@@ -498,7 +585,8 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
                 }));
 
                 console.warn('[PhysicsWorker] ⚠️ Using legacy INIT_DATA (no history buffer)');
-                engine.init([], enriched, '1m');
+                console.warn('[PhysicsWorker] ⚠️ Using legacy INIT_DATA (no history buffer)');
+                engine.init([], enriched, '1m', 0);
             } else {
                 console.error('[PhysicsWorker] Invalid INIT_DATA payload');
             }
@@ -545,7 +633,8 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
                                 [], // History buffer empty for scenarios usually? Or should we split?
                                 // For simplicity in scenario mode, we treat all as simulation queue
                                 scenario.candles,
-                                scenario.interval || '1m'
+                                scenario.interval || '1m',
+                                0 // 🔥 Default Epoch
                             );
 
                             // Notify main thread

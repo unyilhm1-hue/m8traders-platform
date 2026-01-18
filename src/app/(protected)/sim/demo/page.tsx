@@ -172,6 +172,19 @@ function SimDemoPageContent() {
                 const historyBuffer = baseData.slice(0, splitIndex).map(toEnrichedCandle);
                 const simulationQueue = baseData.slice(splitIndex).map(toEnrichedCandle);
 
+                // 🔥 ONE-STEP BACK FIX (Avoid Territory War)
+                // Check if History End overlaps with Queue Start
+                if (historyBuffer.length > 0 && simulationQueue.length > 0) {
+                    const lastHistory = historyBuffer[historyBuffer.length - 1];
+                    const firstQueue = simulationQueue[0];
+
+                    if (lastHistory.t >= firstQueue.t) {
+                        console.warn(`[SimDemoPage] ⚠️ OVERLAP DETECTED (Hist End: ${lastHistory.t} >= Queue Start: ${firstQueue.t})`);
+                        console.warn(`[SimDemoPage] ✂️ Popping last history candle to allow Worker to take over.`);
+                        historyBuffer.pop();
+                    }
+                }
+
                 console.log(
                     `[SimDemoPage] 🔄 Reinit Buffers:\n` +
                     `   Anchor Time: ${store.tempAnchorTime ? new Date(store.tempAnchorTime * 1000).toLocaleString() : 'N/A'}\n` +

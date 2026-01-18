@@ -79,6 +79,7 @@ export interface TradeRecord {
 }
 
 interface SimulationState {
+    epoch: number; // 🔥 Epoch ID for zombie protection
     // Tick state
     currentTick: TickData | null;
     tickHistory: TickData[];
@@ -181,6 +182,7 @@ interface SimulationState {
 // ============================================================================
 
 const initialState = {
+    epoch: 0,
     currentTick: null,
     tickHistory: [],
     maxTickHistory: 100,
@@ -1052,10 +1054,14 @@ export const useSimulationStore = create<SimulationState>()(
             // Update store state
             set((state) => {
                 state.baseInterval = targetInterval;
+                state.epoch += 1; // 🔥 NEW SESSION
+                state.epoch += 1; // 🔥 NEW SESSION (Kills zombies)
                 state.tempAnchorTime = anchorTime; // ✅ Save for UI consumption
 
                 // 🔥 LOGIC: Dynamic History Trimming (Prevent Overlap)
-                let cutOffIndex = resampled.length;
+                // 🔥 LOGIC: Dynamic History Trimming (Prevent Overlap & Starvation)
+                const totalCandles = resampled.length;
+                let cutOffIndex = 0; // Default to 0 if specific logic doesn't set it
 
                 if (anchorTime) {
                     // Find the candle in new data that matches our Anchor Time
@@ -1072,19 +1078,58 @@ export const useSimulationStore = create<SimulationState>()(
                         cutOffIndex = idx + 1;
                         console.log(`[Store] ✂️ Trimmed History at Index ${cutOffIndex} (${new Date(resampled[idx].time).toLocaleString()})`);
                     }
-                } else {
-                    // Fallback: Default to recent 200 candles if no anchor
+                }
+
+                // If anchor logic failed or didn't run (cutOffIndex is 0 or invalid)
+                // Use Fallback Logic
+                if (cutOffIndex === 0) {
                     const DEFAULT_HISTORY = 200;
-                    if (resampled.length > DEFAULT_HISTORY) {
+                    if (totalCandles > DEFAULT_HISTORY) {
                         cutOffIndex = DEFAULT_HISTORY;
+                    } else {
+                        // Fallback for small datasets: Take 90% as history
+                        cutOffIndex = Math.floor(totalCandles * 0.9);
                     }
                 }
 
-                // Safety: Ensure we don't exceed data length
-                cutOffIndex = Math.min(cutOffIndex, resampled.length);
+                // 🔥 CRITICAL SAFETY: Prevent Worker Starvation
+                // We MUST leave at least 1 candle for the Simulation Queue.
+                const MAX_ALLOWED_HISTORY = Math.max(0, totalCandles - 1);
+
+                if (cutOffIndex > MAX_ALLOWED_HISTORY) {
+                    cutOffIndex = MAX_ALLOWED_HISTORY;
+                    console.warn(`[Store] ⚠️ Anti-Starvation: Capped History to ${cutOffIndex}/${totalCandles} candles`);
+                }
+
+                // Optimize for indicators (ensure minimum history if possible)
+                const MIN_HISTORY_FOR_INDICATORS = Math.min(50, totalCandles - 1); // Try to get 50
+                if (cutOffIndex < MIN_HISTORY_FOR_INDICATORS && totalCandles > 10) {
+                    // If we cut too aggressively (e.g. anchor was very early), force some history context
+                    // But only if we have enough data (e.g. > 10 candles)
+                    cutOffIndex = MIN_HISTORY_FOR_INDICATORS;
+                }
 
                 // Slice History
                 const historySlice = resampled.slice(0, cutOffIndex);
+
+                // 🔥 ONE-STEP BACK FIX (Store Side)
+                // Check overlap with Queue (rest of data)
+                // We must ensure History End < Queue Start Timestamp
+                const queueStartIdx = cutOffIndex;
+                if (historySlice.length > 0 && queueStartIdx < resampled.length) {
+                    const lastHist = historySlice[historySlice.length - 1];
+                    const firstQueue = resampled[queueStartIdx];
+
+                    // 🔥 CRITICAL FIX: Compare in SECONDS (Chart Precision)
+                    // Candles might be distinct in MS but collide in Seconds
+                    const tHistSec = normalizeToSeconds(lastHist.time);
+                    const tQueueSec = normalizeToSeconds(firstQueue.time);
+
+                    if (tHistSec >= tQueueSec) {
+                        console.warn(`[Store] ⚠️ Overlap detected (Hist: ${tHistSec}s >= Queue: ${tQueueSec}s). Popping history.`);
+                        historySlice.pop();
+                    }
+                }
 
                 // Convert to chart format (ms → seconds)
                 state.candleHistory = historySlice.map(c => ({

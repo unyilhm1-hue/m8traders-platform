@@ -35,6 +35,14 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
     // 🔥 Flight Recorder Actions
     const { addLog, updateWorkerStatus } = useDebugStore();
 
+    // 🔥 EPOCH SYNC: Prevent Zombie Ticks
+    const currentEpoch = useSimulationStore((s) => s.epoch);
+    const epochRef = useRef(currentEpoch);
+
+    useEffect(() => {
+        epochRef.current = currentEpoch;
+    }, [currentEpoch]);
+
     // Initialize Worker
     useEffect(() => {
         if (typeof window === 'undefined' || isInitialized.current) {
@@ -94,6 +102,10 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
                     case 'TICK':
                         // Push tick to store (for orderbook/tape simulation)
                         if (data) {
+                            // 🔥 ZOMBIE CHECK: Drop ticks from old epochs
+                            if (event.data.epoch !== undefined && event.data.epoch !== epochRef.current) {
+                                return;
+                            }
                             pushTick(data as TickData);
                         }
                         break;
@@ -101,6 +113,10 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
                     case 'CANDLE_UPDATE':
                         // Update current live candle in store (for chart)
                         if (event.data.candle) {
+                            // 🔥 ZOMBIE CHECK: Drop candles from old epochs
+                            if (event.data.epoch !== undefined && event.data.epoch !== epochRef.current) {
+                                return;
+                            }
                             updateCurrentCandle(event.data.candle);
                         }
                         break;
@@ -251,6 +267,7 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
                 historyBuffer: params.historyBuffer,
                 simulationQueue: params.simulationQueue,
                 interval: params.interval,
+                epoch: currentEpoch, // 🔥 Pass Epoch
             });
         } else {
             console.warn('[useSimulationEngine] Worker not ready yet, cannot init with buffers');
