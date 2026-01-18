@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { loadWithSmartBuffering } from '@/utils/smartLoader';
 import type { IntervalType } from '@/types/intervals';
 import { INTERVALS } from '@/types/intervals';
+import { networkLog } from '@/utils/structuredLogger';
 
 export async function GET(request: NextRequest) {
     try {
@@ -21,6 +22,11 @@ export async function GET(request: NextRequest) {
 
         // Validation
         if (!ticker || !date || !interval) {
+            networkLog.error('Missing required parameters', {
+                status: 400,
+                statusText: 'Bad Request',
+                url: request.url
+            });
             return NextResponse.json(
                 {
                     success: false,
@@ -32,6 +38,11 @@ export async function GET(request: NextRequest) {
 
         // Validate interval
         if (!INTERVALS.includes(interval as IntervalType)) {
+            networkLog.error('Invalid interval parameter', {
+                status: 400,
+                interval,
+                validIntervals: INTERVALS
+            });
             return NextResponse.json(
                 {
                     success: false,
@@ -44,6 +55,10 @@ export async function GET(request: NextRequest) {
         // Validate date format (YYYY-MM-DD)
         const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
         if (!dateRegex.test(date)) {
+            networkLog.error('Invalid date format', {
+                status: 400,
+                date
+            });
             return NextResponse.json(
                 {
                     success: false,
@@ -53,7 +68,7 @@ export async function GET(request: NextRequest) {
             );
         }
 
-        console.log(`[API] Loading ${ticker} ${date} at ${interval} with ${warmupCount} warmup`);
+        networkLog.info('Loading simulation data', { ticker, date, interval, warmupCount });
 
         // Load data with smart buffering
         const data = await loadWithSmartBuffering(
@@ -64,6 +79,12 @@ export async function GET(request: NextRequest) {
         );
 
         if (!data) {
+            networkLog.error('No data found', {
+                status: 404,
+                ticker,
+                date,
+                interval
+            });
             return NextResponse.json(
                 {
                     success: false,
@@ -72,6 +93,13 @@ export async function GET(request: NextRequest) {
                 { status: 404 }
             );
         }
+
+        networkLog.info('📦 Data loaded successfully', {
+            ticker: data.ticker,
+            historyCount: data.historyBuffer.length,
+            simCount: data.simulationQueue.length,
+            totalCandles: data.totalCandles
+        });
 
         return NextResponse.json({
             success: true,
@@ -95,7 +123,7 @@ export async function GET(request: NextRequest) {
         });
 
     } catch (error) {
-        console.error('[API] Load simulation data error:', error);
+        networkLog.critical('Load simulation API crashed', error);
 
         return NextResponse.json(
             {

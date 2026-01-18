@@ -12,6 +12,8 @@
  * @module candleResampler
  */
 
+import { devLog } from '@/utils/debug';
+
 export interface Candle {
     time: string | number;
     open: number;
@@ -426,7 +428,29 @@ export function resampleCandles(
     const ratio = intervalToMinutes(targetInterval) / intervalToMinutes(sourceInterval);
     const expectedCount = Math.round(ratio);
 
-    return buckets.map(bucket => aggregateBucket(bucket, expectedCount));
+    const resampled = buckets.map(bucket => aggregateBucket(bucket, expectedCount));
+
+    // 🔥 CRITICAL: DOUBLE SAFETY CHECK
+    // 1. Sort output (even if input was sorted, bucket logic might disorder)
+    // 2. Remove duplicates (same timestamp) - lightweight-charts HATES duplicates!
+    const sortedAndUnique = resampled
+        .sort((a, b) => {
+            const timeA = typeof a.time === 'number' ? a.time : parseTime(a.time);
+            const timeB = typeof b.time === 'number' ? b.time : parseTime(b.time);
+            return timeA - timeB; // Ascending
+        })
+        .filter((item, index, self) =>
+            // Remove duplicates: keep only first occurrence of each timestamp
+            index === self.findIndex((t) => {
+                const tTime = typeof t.time === 'number' ? t.time : parseTime(t.time);
+                const itemTime = typeof item.time === 'number' ? item.time : parseTime(item.time);
+                return tTime === itemTime;
+            })
+        );
+
+    devLog('RESAMPLING', `[Resampler] ✅ Resampled ${candles.length} ${sourceInterval} → ${sortedAndUnique.length} ${targetInterval} candles (deduplicated)`);
+
+    return sortedAndUnique;
 }
 
 /**

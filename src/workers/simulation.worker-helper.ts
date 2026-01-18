@@ -127,6 +127,12 @@ export function calculateTickDensity(
 ): number {
     const BASE_DENSITY = 240; // ticks per minute
 
+    // Safety: Prevent NaN propagation
+    if (isNaN(durationMs) || durationMs <= 0) durationMs = 60000;
+    if (isNaN(volume) || volume < 0) volume = 0;
+    if (isNaN(averageVolume) || averageVolume <= 0) averageVolume = 1;
+    if (isNaN(playbackSpeed) || playbackSpeed <= 0) playbackSpeed = 1;
+
     // Scale by duration
     const durationMinutes = durationMs / 60000;
     let tickCount = BASE_DENSITY * durationMinutes;
@@ -138,7 +144,8 @@ export function calculateTickDensity(
     // Scale by volume
     if (averageVolume > 0) {
         const volumeRatio = volume / averageVolume;
-        tickCount *= Math.max(0.5, Math.min(2.0, volumeRatio));
+        // Cap ratio to preventing exploding tick counts on outliers
+        tickCount *= Math.max(0.5, Math.min(3.0, volumeRatio));
     }
 
     // Scale down for high playback speeds
@@ -148,7 +155,7 @@ export function calculateTickDensity(
     }
 
     const MIN_TICKS = 10;
-    const MAX_TICKS = 500;
+    const MAX_TICKS = 1000; // Increased cap for high granularity
 
     return Math.round(Math.max(MIN_TICKS, Math.min(MAX_TICKS, tickCount)));
 }
@@ -284,7 +291,7 @@ export class SyntheticTickGenerator {
     }
 
     private generateVolumeProfile(totalVolume: number, tickCount: number): number[] {
-        if (totalVolume <= 0) return new Array(tickCount).fill(0);
+        if (totalVolume <= 0 || tickCount <= 0) return new Array(Math.max(0, tickCount)).fill(0);
 
         const profile: number[] = new Array(tickCount).fill(0);
         let remaining = totalVolume;
@@ -302,12 +309,21 @@ export class SyntheticTickGenerator {
         }
 
         const totalWeight = profile.reduce((a, b) => a + b, 0);
+
+        // Safety: Prevent div by zero
+        if (totalWeight === 0) return new Array(tickCount).fill(0);
+
         for (let i = 0; i < tickCount; i++) {
+            // Safety: Ensure we don't produce NaNs
             const v = Math.floor((profile[i] / totalWeight) * totalVolume);
-            profile[i] = v;
-            remaining -= v;
+            profile[i] = isNaN(v) ? 0 : v;
+            remaining -= profile[i];
         }
-        profile[tickCount - 1] += remaining;
+
+        // Distribute remainder to last tick
+        if (tickCount > 0) {
+            profile[tickCount - 1] += remaining;
+        }
 
         return profile;
     }

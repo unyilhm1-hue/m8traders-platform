@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 import { Inter, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { ErrorCaptureInit } from '@/components/ErrorCaptureInit';
 
 const inter = Inter({
   variable: '--font-inter',
@@ -54,7 +56,15 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="id" className="dark" suppressHydrationWarning>
-      <body className={`${inter.variable} ${jetbrainsMono.variable} antialiased`}>{children}</body>
+      <body className={`${inter.variable} ${jetbrainsMono.variable} antialiased`}>
+        {/* 🔭 Global Observer: Catches all errors before they crash the app */}
+        <ErrorCaptureInit />
+
+        {/* 🛡️ Error Boundary: Prevents React crashes from blank screening */}
+        <ErrorBoundary>
+          {children}
+        </ErrorBoundary>
+      </body>
     </html>
   );
 }

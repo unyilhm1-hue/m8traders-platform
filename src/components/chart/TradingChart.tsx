@@ -17,6 +17,8 @@ import { DrawingOverlay } from './DrawingOverlay';
 import { useChartStore } from '@/stores';
 import { calculateIndicator } from '@/lib/chart/indicators';
 import { profiler, KPI_TARGETS } from '@/utils/profiler';
+import { formatError } from '@/utils/formatError';
+import { sanitizeDataForChart } from '@/utils/chartSanitizer';
 
 interface TradingChartProps {
     className?: string;
@@ -27,6 +29,9 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const mainChartRef = useRef<IChartApi | null>(null);
     const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+
+    // 🔥 RACE CONDITION FIX: Guard against updates before chart is ready
+    const isChartReady = useRef<boolean>(false);
 
     // 🔥 NEW: Context for Overlay
     const { setChart, setMainSeries } = useChartContext();
@@ -158,18 +163,52 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
     };
 
     // --- B. LOAD HISTORY ---
+    const currentInterval = useSimulationStore((s) => s.baseInterval);
+    const prevIntervalRef = useRef<string>(currentInterval);
+
+    // --- B. HISTORY LOADING EFFECT (Load Chart Data) ---
     useEffect(() => {
         if (!candleHistory || candleHistory.length === 0) return;
         if (!candleSeriesRef.current || !mainChartRef.current) return;
 
-        const currentInterval = useSimulationStore.getState().baseInterval;
-        const lastCandleTime = candleHistory[candleHistory.length - 1].time;
+        const lastCandleTime = candleHistory[candleHistory.length - 1]?.time;
         const total = candleHistory.length;
 
-        // 🔥 FIX: Enhanced Guard
-        // Check timestamp AND total count AND interval to detect silent updates (e.g. dedup/overwrite)
-        if (historyLoadedRef.current === lastCandleTime &&
-            historyLoadedLengthRef.current === total && // Added length check
+        // 🔥 FIX: Comprehensive interval change handling
+        if (prevIntervalRef.current !== currentInterval) {
+            console.log(`[Chart] 🔄 Interval changed: ${prevIntervalRef.current} → ${currentInterval}`);
+
+            // 1. Reset timestamp tracking
+            lastUpdateTimeRef.current = 0;
+            historyLoadedRef.current = 0;
+            historyLoadedLengthRef.current = 0;
+
+            // 2. Clear all indicator series
+            indicatorSeriesRef.current.forEach((series) => {
+                try {
+                    mainChartRef.current?.removeSeries(series);
+                } catch (err) {
+                    // Series might already be removed, ignore
+                }
+            });
+            indicatorSeriesRef.current.clear();
+
+            // 3. Clear pending updates
+            pendingUpdateRef.current = null;
+
+            // 4. Update interval ref
+            prevIntervalRef.current = currentInterval;
+            lastLoadedIntervalRef.current = ''; // Force reload
+
+            console.log(`[Chart] ✅ Chart state reset for new interval`);
+        }
+
+        // 🔥 GUARD #1: Skip reload if chart is already at this exact point
+        // Prevent redundant setData calls on same data
+        const isIntervalChange = lastLoadedIntervalRef.current !== currentInterval;
+        if (!isIntervalChange &&
+            historyLoadedRef.current === lastCandleTime &&
+            historyLoadedLengthRef.current === total &&
             lastLoadedIntervalRef.current === currentInterval) {
             return;
         }
@@ -183,11 +222,16 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
             const WINDOW_THRESHOLD = 5000;
             const WINDOW_SIZE = 2000; // Load last 2k candles + buffer
 
+            // 🔥 CRITICAL: Use sanitizer to handle ALL key formats and guarantee sort!
+            // Manual sort was failing silently (accessing a.time when data has 'timestamp' key)
+            // Sanitizer normalizes time/t/timestamp → guaranteed sorted & deduplicated output
+            const sortedHistory = sanitizeDataForChart(candleHistory);
+
             let candleData;
             if (total > WINDOW_THRESHOLD) {
                 // Large dataset: only load recent window
                 const startIdx = Math.max(0, total - WINDOW_SIZE);
-                const windowedHistory = candleHistory.slice(startIdx);
+                const windowedHistory = sortedHistory.slice(startIdx);
                 candleData = windowedHistory.map((c) => ({
                     time: c.time as Time,
                     open: c.open,
@@ -198,13 +242,27 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
                 console.log(`[Chart] 🪟 Windowed load: ${windowedHistory.length} of ${total} candles`);
             } else {
                 // Small dataset: load all
-                candleData = candleHistory.map((c) => ({
+                candleData = sortedHistory.map((c) => ({
                     time: c.time as Time,
                     open: c.open,
                     high: c.high,
                     low: c.low,
                     close: c.close,
                 }));
+            }
+
+            // 🔬 DEBUG: Log sample of sorted data to verify ordering
+            if (sortedHistory.length > 0) {
+                const first5 = sortedHistory.slice(0, 5).map(c => ({ time: c.time, close: c.close }));
+                const last5 = sortedHistory.slice(-5).map(c => ({ time: c.time, close: c.close }));
+                console.log('[Chart] 📊 Sorted data sample:', {
+                    total: sortedHistory.length,
+                    first5,
+                    last5,
+                    isAscending: sortedHistory.every((c, i, arr) =>
+                        i === 0 || Number(arr[i - 1].time) <= Number(c.time)
+                    )
+                });
             }
 
             // 🔬 PROFILING: Measure setData duration
@@ -214,6 +272,10 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
             });
 
             candleSeriesRef.current.setData(candleData);
+
+            // 🔥 CRITICAL: Mark chart as ready AFTER data is loaded
+            isChartReady.current = true;
+            console.log('[Chart] ✅ Chart ready. Updates now allowed.');
 
             const setDataDuration = profiler.end('chart_setData');
 
@@ -277,12 +339,33 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
                 return;
             }
 
-            if ((update.time as number) < lastUpdateTimeRef.current) return;
+            // 🔥 VALIDATION: Check all OHLC values are valid numbers
+            if (!update.open || !update.high || !update.low || !update.close) {
+                console.error('[Chart] ❌ Rejected update with invalid OHLC:', update);
+                pendingUpdateRef.current = null;
+                return;
+            }
+
+            if (update.high < update.low) {
+                console.error('[Chart] ❌ Rejected update: high < low', update);
+                pendingUpdateRef.current = null;
+                return;
+            }
+
+            // 🔥 NO TIMESTAMP VALIDATION: Store bucket logic handles this!
+            // Bucket logic ensures timestamps are always correct for current interval
 
             try {
+                console.log('[Chart] 🔄 Attempting update:', {
+                    time: update.time,
+                    close: update.close,
+                    lastSuccessful: lastUpdateTimeRef.current
+                });
+
                 candleSeriesRef.current.update(update);
                 lastUpdateTimeRef.current = update.time as number;
 
+                console.log('[Chart] ✅ Update successful');
                 // 🔥 REAL-TIME INDICATOR UPDATES (Incremental)
                 // Wiggle the indicators with the live price!
                 if (indicatorSeriesRef.current.size > 0 && activeIndicatorsRef.current.length > 0) {
@@ -353,7 +436,10 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
                 }
 
             } catch (err) {
-                console.error('[Chart] 💥 Update failed:', err, update);
+                console.error('[Chart] ❌ Update failed:', formatError(err));
+                console.error('[Chart] 📦 Failed update data:', update);
+                console.error('[Chart] ⏰ Last successful time:', lastUpdateTimeRef.current);
+                console.error('[Chart] ⏰ Attempted time:', update.time);
             }
 
             pendingUpdateRef.current = null;
@@ -363,25 +449,45 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
         const unsubscribe = useSimulationStore.subscribe((state) => {
             const currentCandle = state.currentCandle;
             if (!currentCandle) return;
-            const time = normalizeTimestamp(currentCandle.time);
 
-            // 🔥 FIX: Guard against invalid candles to prevent label dropout
-            if (!currentCandle.open || !currentCandle.close || !currentCandle.high || !currentCandle.low) return;
-
-            // 🔥 FIX: Detect Seek/Reset (Backwards time jump)
-            // If we receive a timestamp OLDER than the last processed one, it means user seeked back.
-            // We must allow this update by resetting the gatekeeper.
-            if ((time as number) < lastUpdateTimeRef.current) {
-                // console.log('[Chart] ⏪ Time reset detected, allowing update');
-                lastUpdateTimeRef.current = 0;
+            // ⛔ SATPAM: Prevent updates before chart is initialized
+            if (!isChartReady.current) {
+                console.warn('[Chart] ⏸️ Update blocked: Chart not ready yet');
+                return;
             }
 
+            // 🔥 FIX: currentCandle is already aggregated by bucket logic in store!
+            // No need to validate timestamps - store handles UPDATE vs CREATE
+            let time = currentCandle.time; // Already in seconds, already snapped to interval grid
+
+            // 🔥 CRITICAL FIX: Ensure time is a NUMBER, not an object!
+            // Lightweight-charts error: "last time=[object Object]" means time is not primitive
+            if (typeof time !== 'number') {
+                console.error('[Chart] ❌ Time is not a number!', { time, type: typeof time });
+                // Try to extract number
+                time = Number(time);
+                if (isNaN(time)) {
+                    console.error('[Chart] ❌ Cannot convert time to number, skipping');
+                    return;
+                }
+            }
+
+            // 🔥 GUARD: Validate candle data
+            if (!currentCandle.open || !currentCandle.close || !currentCandle.high || !currentCandle.low) {
+                console.warn('[Chart] ⚠️ Invalid candle data, skipping:', currentCandle);
+                return;
+            }
+
+            // Queue update for next RAF
+            // 🔥 CRITICAL: Create CLEAN object with ONLY required fields
+            // Lightweight-charts REJECTS updates with unknown fields!
             pendingUpdateRef.current = {
-                time: time as Time,
+                time: time as Time,  // Now guaranteed to be number
                 open: currentCandle.open,
                 high: currentCandle.high,
                 low: currentCandle.low,
                 close: currentCandle.close,
+                // NO OTHER FIELDS! Chart library is strict
             };
             if (rafId === null) {
                 rafId = requestAnimationFrame(flushUpdate);

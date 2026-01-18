@@ -5,6 +5,8 @@
 import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
 import { AuthButton } from '@/components/layout/AuthButton';
+import { PerformanceDashboard } from '@/components/debug/PerformanceDashboard';
+import { DebugPanel } from '@/components/debug/DebugPanel';
 import Link from 'next/link';
 
 export default async function ProtectedLayout({
@@ -67,6 +69,10 @@ export default async function ProtectedLayout({
 
             {/* Main Content */}
             <main className="flex-1">{children}</main>
+
+            {/* Debug Tools */}
+            <PerformanceDashboard />
+            <DebugPanel />
         </div>
     );
 }

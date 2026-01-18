@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useSimulationStore } from '@/stores/useSimulationStore';
+import { useDebugStore } from '@/stores/useDebugStore'; // 🔥 NEW: Flight Recorder
 import type { TickData } from '@/types/simulation';
 
 interface SimulationEngineOptions {
@@ -27,8 +28,10 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
 
     // Get store actions
     const pushTick = useSimulationStore((s) => s.pushTick);
-    const setCandleHistory = useSimulationStore((s) => s.setCandleHistory);
     const updateCurrentCandle = useSimulationStore((s) => s.updateCurrentCandle);
+
+    // 🔥 Flight Recorder Actions
+    const { addLog, updateWorkerStatus } = useDebugStore();
 
     // Initialize Worker
     useEffect(() => {
@@ -40,8 +43,6 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
 
         try {
             // ✅ NEXT.JS WORKER PATTERN (Option 3)
-            // This allows Webpack 5 to automatically compile the TypeScript worker
-            // The worker will be bundled and transpiled by Next.js build process
             const worker = new Worker(
                 new URL('@/workers/simulation.worker.ts', import.meta.url),
                 { type: 'module' }
@@ -49,11 +50,25 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
 
             // Message handler
             worker.onmessage = (event: MessageEvent) => {
-                const { type, data } = event.data;
+                const { type, data, level, message, payload } = event.data;
+
+                // 🩺 Flight Recorder Heartbeat
+                updateWorkerStatus('physics', { status: 'working' });
 
                 switch (type) {
+                    case 'LOG':
+                        addLog('WorkerA', level || 'info', message || 'Log received', payload);
+                        break;
+
+                    case 'ERROR':
+                        addLog('WorkerA', 'error', message || 'Worker error', payload);
+                        updateWorkerStatus('physics', { status: 'error' });
+                        // Also log to console for dev visibility
+                        console.error('[Worker Error]', message, payload);
+                        break;
+
                     case 'READY':
-                        console.log('[useSimulationEngine] Worker ready');
+                        addLog('WorkerA', 'info', 'Worker ready');
                         isInitialized.current = true;
                         setIsReady(true); // ✅ Trigger context update
 
@@ -63,11 +78,8 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
                         }
                         break;
 
-                    // ✅ HISTORY_READY removed - History is managed by page.tsx via loadSimulationDay
-                    // This prevents worker from overwriting history with future data
-
                     case 'DATA_READY':
-                        console.log(`[useSimulationEngine] Data loaded: ${event.data.totalCandles} candles`);
+                        addLog('WorkerA', 'info', `Data loaded: ${event.data.totalCandles} candles`);
 
                         // Auto-play if enabled
                         if (autoPlay) {
@@ -90,21 +102,16 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
                         break;
 
                     case 'CANDLE_CHANGE':
-                        console.log(`[useSimulationEngine] Candle ${event.data.candleIndex}`);
+                        // console.log(`[useSimulationEngine] Candle ${event.data.candleIndex}`);
                         break;
 
                     case 'PLAYBACK_STATE':
-                        // ✅ NEW: Sync playback state from worker
                         console.log(`[useSimulationEngine] Playback state: ${event.data.isPlaying ? 'Playing' : 'Paused'} at ${event.data.speed}x`);
-                        // Store can listen to this if needed for UI updates
                         break;
 
                     case 'COMPLETE':
+                        addLog('WorkerA', 'info', 'Simulation complete');
                         console.log('[useSimulationEngine] Simulation complete');
-                        break;
-
-                    case 'ERROR':
-                        console.error('[useSimulationEngine] Worker error:', event.data.message);
                         break;
 
                     default:
@@ -113,22 +120,14 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
             };
 
             // ✅ ENHANCED ERROR HANDLING
-            // Logs specific compilation errors for debugging
             worker.onerror = (error: ErrorEvent) => {
-                console.error('[useSimulationEngine] Worker initialization/runtime error:', {
-                    message: error.message,
-                    filename: error.filename,
-                    lineno: error.lineno,
-                    colno: error.colno,
-                    error: error.error,
-                });
+                console.error('[useSimulationEngine] Worker initialization/runtime error:', error.message);
 
-                // Try to provide helpful debug info
-                if (error.message.includes('Cannot find')) {
-                    console.error('💡 Worker file not found. Ensure src/workers/simulation.worker.ts exists.');
-                } else if (error.message.includes('syntax')) {
-                    console.error('💡 Syntax error in worker. Check TypeScript compilation.');
-                }
+                addLog('WorkerA', 'error', `Runtime Error: ${error.message}`, {
+                    filename: error.filename,
+                    lineno: error.lineno
+                });
+                updateWorkerStatus('physics', { status: 'error' });
             };
 
             workerRef.current = worker;
@@ -136,11 +135,7 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
 
         } catch (error) {
             console.error('[useSimulationEngine] Failed to initialize Worker:', error);
-
-            // Additional debugging for common issues
-            if (error instanceof TypeError) {
-                console.error('💡 TypeError suggests Worker constructor failed. Check file path and module support.');
-            }
+            addLog('System', 'error', 'Failed to initialize Worker', error);
         }
 
         // Cleanup
@@ -150,6 +145,7 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
                 workerRef.current = null;
                 isInitialized.current = false;
                 console.log('[useSimulationEngine] Worker terminated');
+                updateWorkerStatus('physics', { status: 'offline' });
             }
         };
     }, []); // Run once
@@ -177,8 +173,9 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
 
         } catch (error) {
             console.error('[useSimulationEngine] Failed to load data:', error);
+            addLog('System', 'error', 'Failed to auto-load default data', error);
         }
-    }, []);
+    }, [addLog]);
 
     // Control methods
     const play = useCallback((speed: number = 1) => {
@@ -249,6 +246,17 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
         }
     }, []);
 
+    // 🔥 NEW: Load Scenario Directly from IDB (Worker)
+    const loadScenario = useCallback((scenarioId: string) => {
+        if (workerRef.current) {
+            console.log(`[useSimulationEngine] 📥 Instructing worker to load scenario: ${scenarioId}`);
+            workerRef.current.postMessage({
+                type: 'LOAD_SCENARIO',
+                scenarioId,
+            });
+        }
+    }, []);
+
     // 🔥 NEW: Sync Interval Method
     const setInterval = useCallback((interval: string) => {
         if (workerRef.current) {
@@ -269,6 +277,7 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
         reload,
         initWithData,      // Legacy method
         initWithBuffers,   // 🔥 NEW: Smart buffering method
+        loadScenario,      // 🆕 Exposed method: Load from IDB
         setInterval,       // 🆕 Exposed method
         isReady,
     };

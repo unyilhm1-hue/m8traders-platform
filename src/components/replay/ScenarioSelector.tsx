@@ -8,6 +8,7 @@ import { useState, useEffect } from 'react';
 import { useChartStore } from '@/stores';
 import { listScenarios, loadScenario } from '@/lib/scenario/scenarioManager';
 import type { ScenarioDefinition } from '@/types/scenario';
+import { useSimulationEngineContext } from '@/contexts/SimulationEngineContext';
 
 interface ScenarioSelectorProps {
     className?: string;
@@ -20,6 +21,9 @@ export function ScenarioSelector({ className = '' }: ScenarioSelectorProps) {
     const [selectedScenario, setSelectedScenario] = useState<ScenarioDefinition | null>(null);
 
     const { setReplayMode, setReplayData, replayMode } = useChartStore();
+
+    // ✅ Use Engine Context
+    const { engine } = useSimulationEngineContext();
 
     // Load scenarios on mount
     useEffect(() => {
@@ -38,22 +42,25 @@ export function ScenarioSelector({ className = '' }: ScenarioSelectorProps) {
     const handleSelectScenario = async (scenario: ScenarioDefinition) => {
         setLoading(true);
         try {
-            // Load full scenario data
-            const scenarioData = await loadScenario(scenario.id);
+            console.log(`[ScenarioSelector] Selecting scenario: ${scenario.name} (${scenario.id})`);
 
-            if (scenarioData) {
-                // Set replay mode and data
-                setReplayMode('scenario');
-                setReplayData(scenarioData.candles);
-                setSelectedScenario(scenario);
-                setIsOpen(false);
+            setReplayMode('scenario');
+            setSelectedScenario(scenario);
 
-                console.log(`[ScenarioSelector] Loaded scenario: ${scenario.name} (${scenarioData.candles.length} candles)`);
+            setReplayData([]);
+
+            if (engine) {
+                engine.loadScenario(scenario.id);
+            } else {
+                console.error('[ScenarioSelector] Engine not ready, cannot load scenario');
             }
+
         } catch (error) {
-            console.error('[ScenarioSelector] Failed to load scenario:', error);
+            console.error('[ScenarioSelector] Failed to select scenario:', error);
+            setReplayMode('live'); // Revert
         } finally {
             setLoading(false);
+            setIsOpen(false);
         }
     };
 
@@ -64,10 +71,8 @@ export function ScenarioSelector({ className = '' }: ScenarioSelectorProps) {
         // Optionally reset index if store exposes it, but clearing data usually suffices or chart handles it
     };
 
-    // Only show if in scenario mode or has scenarios available
-    if (replayMode !== 'scenario' && scenarios.length === 0) {
-        return null;
-    }
+    // Always show the selector, even if empty, to allow users to see the feature exists
+    // and potentially prompt them to create scenarios.
 
     return (
         <div className={`relative ${className}`}>

@@ -310,7 +310,7 @@ function SimDemoPageContent() {
                 </aside>
 
                 {/* Market Data Panel */}
-                <MarketDataPanel currentPrice={currentPrice} />
+                <MarketDataPanel />
             </div>
         </div>
     );

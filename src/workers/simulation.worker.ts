@@ -21,17 +21,25 @@ import {
 // Minimizing local types, relying on Helper where possible
 
 interface WorkerMessage {
-    type: 'INIT_DATA' | 'PLAY' | 'PAUSE' | 'STOP' | 'SET_SPEED' | 'SEEK' | 'CALCULATE_INDICATOR' | 'SET_INTERVAL';
+    type: 'INIT_DATA' | 'PLAY' | 'PAUSE' | 'STOP' | 'SET_SPEED' | 'SEEK' | 'CALCULATE_INDICATOR' | 'SET_INTERVAL' | 'LOAD_SCENARIO' | 'LOG' | 'ERROR';
 
     // Smart buffers (Data from Worker A)
     historyBuffer?: EnrichedCandle[];
     simulationQueue?: EnrichedCandle[];
     interval?: string;
 
+    // Scenario Load
+    scenarioId?: string;
+
     // Playback params
     speed?: number;
     index?: number;
     indicator?: any;
+
+    // Logging Payload
+    payload?: any;
+    level?: 'info' | 'warn' | 'error' | 'debug';
+    message?: string;
 
     // Legacy support (optional, minimal maintenance)
     candles?: Candle[];
@@ -85,8 +93,17 @@ class SimulationEngine {
     private averageVolume: number = 1;
 
     constructor() {
-        if (DEBUG_WORKER) console.log('[PhysicsWorker] 🚀 Engine Initialized (v2.0 Factory Model)');
+        this.log('info', '[PhysicsWorker] 🚀 Engine Initialized (v2.0 Factory Model)');
         postMessage({ type: 'READY' });
+    }
+
+    public log(level: 'info' | 'warn' | 'error' | 'debug', message: string, payload?: any) {
+        postMessage({
+            type: 'LOG',
+            level,
+            message,
+            payload
+        });
     }
 
     /**
@@ -97,10 +114,10 @@ class SimulationEngine {
         this.candles = simulation;
         this.currentIntervalStr = interval;
 
-        if (DEBUG_WORKER) console.log(`[PhysicsWorker] 📥 Received ${history.length} History + ${simulation.length} Sim Candles`);
+        this.log('info', `[PhysicsWorker] 📥 Received ${history.length} History + ${simulation.length} Sim Candles`);
 
         if (this.candles.length === 0) {
-            console.warn('[PhysicsWorker] ⚠️ No simulation candles to play!');
+            this.log('warn', '[PhysicsWorker] ⚠️ No simulation candles to play!');
             return;
         }
 
@@ -140,6 +157,7 @@ class SimulationEngine {
         this.currentCandleIndex = 0;
         this.currentTickIndex = 0;
         this.initializeAggregatedCandle();
+        this.log('info', '[PhysicsWorker] Stopped and reset');
     }
 
     setSpeed(speed: number) {
@@ -188,21 +206,23 @@ class SimulationEngine {
         const candle = this.candles[this.currentCandleIndex];
         const nextCandle = this.candles[this.currentCandleIndex + 1];
 
-        // 1. Durasi Logic (Dynamic)
-        // 🔥 FIX: Remove hardcoded 5m clamp. Trust the data gaps (e.g. overnight).
-        // If nextCandle exists, use exact diff. If not, use current interval or fallback.
-        let durationMs = 60000; // Default 1m
+        // 1. Durasi Logic (Fixed)
+        // 🔥 GAP FIX: Always use the defined Interval Duration for physics tick generation.
+        // We do not want to fill "Weekend Gaps" with millions of ticks.
+        // A 1m candle always represents 1 minute of trading logic.
 
-        if (nextCandle) {
+        const intervalMap: Record<string, number> = {
+            '1m': 60000, '5m': 300000, '15m': 900000, '30m': 1800000,
+            '1h': 3600000, '60m': 3600000, '4h': 14400000, '1d': 86400000
+        };
+
+        // Strict duration based on interval
+        let durationMs = intervalMap[this.currentIntervalStr] || 60000;
+
+        // Optional: If next candle exists AND is closer than the interval (e.g. premature close?), 
+        // we could clamp it. But generally, sticking to interval duration is safer for physics.
+        if (nextCandle && (nextCandle.t - candle.t) < durationMs) {
             durationMs = nextCandle.t - candle.t;
-        } else {
-            // Last candle: Try to infer from current interval string
-            // "1d" -> 86400000, "1h" -> 3600000
-            const intervalMap: Record<string, number> = {
-                '1m': 60000, '5m': 300000, '15m': 900000, '30m': 1800000,
-                '1h': 3600000, '60m': 3600000, '4h': 14400000, '1d': 86400000
-            };
-            durationMs = intervalMap[this.currentIntervalStr] || 60000;
         }
 
         // Clamp only for sanity (e.g. > 1 week gap might be skip, but let's allow "real" gaps)
@@ -432,7 +452,7 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
                     bodyRatio: 0.5,
                     upperWickRatio: 0.2,
                     lowerWickRatio: 0.2,
-                    pattern: 'doji'
+                    pattern: 'doji' as any
                 }));
 
                 console.warn('[PhysicsWorker] ⚠️ Using legacy INIT_DATA (no history buffer)');
@@ -455,8 +475,56 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
             break;
         case 'SET_INTERVAL':
             if (event.data.interval) {
-                if (DEBUG_WORKER) console.log(`[PhysicsWorker] 🔄 Interval synced to: ${event.data.interval}`);
+                engine.log('info', `[PhysicsWorker] 🔄 Interval synced to: ${event.data.interval}`);
                 engine.setInterval(event.data.interval);
+            }
+            break;
+        case 'LOAD_SCENARIO':
+            if (event.data.scenarioId) {
+                engine.log('info', `[PhysicsWorker] 📥 Loading scenario: ${event.data.scenarioId}`);
+
+                // Directly access IndexedDB to avoid main thread serialization overhead
+                const request = indexedDB.open('m8traders-historical', 1);
+
+                request.onsuccess = (e) => {
+                    const db = (e.target as IDBOpenDBRequest).result;
+                    const tx = db.transaction('scenarios', 'readonly');
+                    const store = tx.objectStore('scenarios');
+                    const getReq = store.get(event.data.scenarioId!);
+
+                    getReq.onsuccess = () => {
+                        const scenario = getReq.result;
+                        if (scenario && scenario.candles) {
+                            engine.log('info', `[PhysicsWorker] ✅ Scenario loaded: ${scenario.candles.length} candles`);
+
+                            // Initialize engine with loaded data
+                            // Assuming scenarios always use 1m interval for now, or get from metadata
+                            engine.init(
+                                [], // History buffer empty for scenarios usually? Or should we split?
+                                // For simplicity in scenario mode, we treat all as simulation queue
+                                scenario.candles,
+                                scenario.interval || '1m'
+                            );
+
+                            // Notify main thread
+                            postMessage({
+                                type: 'DATA_READY',
+                                totalCandles: scenario.candles.length
+                            });
+
+                        } else {
+                            engine.log('error', `[PhysicsWorker] ❌ Scenario not found/empty: ${event.data.scenarioId}`);
+                        }
+                    };
+
+                    getReq.onerror = () => {
+                        engine.log('error', `[PhysicsWorker] ❌ Failed to read scenario from IDB`);
+                    };
+                };
+
+                request.onerror = () => {
+                    engine.log('error', `[PhysicsWorker] ❌ Failed to open IDB`);
+                };
             }
             break;
         case 'SEEK':

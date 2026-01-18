@@ -310,43 +310,59 @@ export function normalizeTimestamp(rawTime: number | Date | string | undefined):
  * Generate synthetic orderbook from current price
  * Simulates realistic bid/ask spread and depth
  */
+// Cached orderbook parameters (updated only when price changes significantly)
+let cachedOrderbookPrice = 0;
+let cachedSpread = 0;
+let cachedTickSize = 0;
+const PRICE_CHANGE_THRESHOLD = 0.001; // 0.1% price change triggers recalculation
+
 function generateOrderbook(
     price: number,
     depth: number = 10
 ): { bids: OrderbookLevel[]; asks: OrderbookLevel[] } {
+    // 🚀 OPTIMIZATION: Only recalculate spread when price changes significantly
+    const priceChangePercent = Math.abs((price - cachedOrderbookPrice) / cachedOrderbookPrice);
+    if (cachedOrderbookPrice === 0 || priceChangePercent > PRICE_CHANGE_THRESHOLD) {
+        cachedOrderbookPrice = price;
+        // Spread: 0.01% - 0.05% (use middle value to avoid random)
+        cachedSpread = price * 0.00025; // Average spread
+        cachedTickSize = cachedSpread / 4;
+    }
+
     const bids: OrderbookLevel[] = [];
     const asks: OrderbookLevel[] = [];
 
-    // Spread: 0.01% - 0.05%
-    const spreadPercent = 0.0001 + Math.random() * 0.0004;
-    const spread = price * spreadPercent;
-    const tickSize = spread / 4; // 4 levels within spread
+    // 🚀 OPTIMIZATION: Pre-calculate base volume (avoid random in loop)
+    const baseVolume = 3000; // Middle value instead of random 1000-6000
+    const baseCount = 5; // Middle value instead of random 1-10
 
     // Generate bids (below current price)
     for (let i = 0; i < depth; i++) {
-        const levelPrice = price - spread - (i * tickSize);
-        const volume = Math.floor(1000 + Math.random() * 5000);
-        const count = Math.floor(1 + Math.random() * 10);
+        const levelPrice = price - cachedSpread - (i * cachedTickSize);
+        // Simple volume decay with depth (no random)
+        const volumeDecay = 1 - (i * 0.05); // 5% decay per level
+        const volume = Math.floor(baseVolume * volumeDecay);
 
         bids.push({
             price: Math.round(levelPrice * 100) / 100,
             volume,
-            count,
+            count: baseCount,
         });
     }
 
-    // Generate asks (above current price)
+    // Generate asks (above current price) 
     for (let i = 0; i < depth; i++) {
-        const levelPrice = price + spread + (i * tickSize);
-        const volume = Math.floor(1000 + Math.random() * 5000);
-        const count = Math.floor(1 + Math.random() * 10);
+        const levelPrice = price + cachedSpread + (i * cachedTickSize);
+        const volumeDecay = 1 - (i * 0.05);
+        const volume = Math.floor(baseVolume * volumeDecay);
 
         asks.push({
             price: Math.round(levelPrice * 100) / 100,
             volume,
-            count,
+            count: baseCount,
         });
     }
+
 
     return { bids, asks };
 }
@@ -390,11 +406,15 @@ export const useSimulationStore = create<SimulationState>()(
 
                         // 🔬 PROFILING: Measure batch update duration
                         const startTime = performance.now();
+                        const profileTimes: Record<string, number> = {};
 
                         // Process ONLY the latest tick (most recent state)
                         const latestTick = batch[batch.length - 1];
+                        profileTimes.tickExtract = performance.now() - startTime;
 
+                        const setStartTime = performance.now();
                         set((state) => {
+                            const stateStartTime = performance.now();
                             const lastPrice = state.currentPrice;
                             const currentPrice = latestTick.price;
 
@@ -406,8 +426,10 @@ export const useSimulationStore = create<SimulationState>()(
                             if (state.tickHistory.length > state.maxTickHistory) {
                                 state.tickHistory.shift();
                             }
+                            profileTimes.tickUpdate = performance.now() - stateStartTime;
 
                             // Update price state
+                            const priceStartTime = performance.now();
                             state.lastPrice = lastPrice;
                             state.currentPrice = currentPrice;
 
@@ -415,16 +437,20 @@ export const useSimulationStore = create<SimulationState>()(
                                 state.priceChange = currentPrice - lastPrice;
                                 state.priceChangePercent = (state.priceChange / lastPrice) * 100;
                             }
+                            profileTimes.priceCalc = performance.now() - priceStartTime;
 
                             // Update cumulative volume
                             state.cumulativeVolume += latestTick.volume;
 
                             // 🔥 BATCHED: Generate orderbook ONCE per frame
+                            const orderbookStartTime = performance.now();
                             const { bids, asks } = generateOrderbook(currentPrice, state.orderbookDepth);
                             state.orderbookBids = bids;
                             state.orderbookAsks = asks;
+                            profileTimes.orderbook = performance.now() - orderbookStartTime;
 
                             // 🔥 BATCHED: Add to time & sales ONCE per frame
+                            const tradesStartTime = performance.now();
                             if (latestTick.volume > 0) {
                                 const trade: TradeRecord = {
                                     price: currentPrice,
@@ -440,11 +466,13 @@ export const useSimulationStore = create<SimulationState>()(
                                     state.recentTrades.pop();
                                 }
                             }
+                            profileTimes.trades = performance.now() - tradesStartTime;
 
                             // Clear batch queue
                             state.tickBatchQueue = [];
                             state.tickBatchScheduled = false;
                         });
+                        profileTimes.setState = performance.now() - setStartTime;
 
                         // 🔬 PROFILING: End measurement and check KPI
                         const duration = performance.now() - startTime;
@@ -452,6 +480,14 @@ export const useSimulationStore = create<SimulationState>()(
                         // KPI_TARGETS.STORE.TICK_BATCH = 2ms, TICK_BATCH_PEAK = 5ms
                         if (duration > 2) { // 2ms target
                             console.warn(`[Store] ⚠️ Tick batch exceeded target: ${duration.toFixed(2)}ms > 2ms (batch size: ${batch.length})`);
+                            console.log(`[Store] 📊 Breakdown:`, {
+                                total: `${duration.toFixed(2)}ms`,
+                                setState: `${profileTimes.setState.toFixed(2)}ms`,
+                                orderbook: `${profileTimes.orderbook.toFixed(2)}ms`,
+                                trades: `${profileTimes.trades.toFixed(2)}ms`,
+                                tickUpdate: `${profileTimes.tickUpdate.toFixed(2)}ms`,
+                                priceCalc: `${profileTimes.priceCalc.toFixed(2)}ms`,
+                            });
                         }
                     });
                 }
@@ -625,27 +661,22 @@ export const useSimulationStore = create<SimulationState>()(
         },
 
         loadSimulationDay: async (dateStr, rawCandles) => {
-            // 🛡️ ZOMBIE KILLER: Terminate existing physics worker if running
-            // Note: We don't have direct access to 'worker' instance here since it's likely managed 
-            // in a hook or separate controller. However, if we are reloading data, we should 
-            // signal the UI/Controller to restart the worker.
-            // Ideally, this store should manage the worker instance if we want full orchestration here.
+            const { marketConfig, reset } = useSimulationStore.getState();
 
-            // For now, we update the state and expect the SimulationController/Hook 
-            // to react to 'simulationCandles' changes or a new explicit signal.
+            // Import logger dynamically to avoid circular deps
+            const { storeLog } = await import('@/utils/structuredLogger');
 
-            // 🚨 ARCHITECTURE NOTE:
-            // Since the user wants orchestration HERE ("Main Thread Orchestration... Update useSimulationStore"),
-            // we will assume this function effectively PREPARES the data. 
-            // The actual Worker B spawn might happen in the component (useEffect) OR we move the worker 
-            // instance into the store (which is complex with Zustand/Immer).
-
-            // Let's implement the "Data Preparation" part using Worker A here.
-
-            const { marketConfig } = useSimulationStore.getState();
             set({ isPreparingData: true });
 
-            console.log(`[Store] 🏭 Factory Model: Starting Data Preparation for ${dateStr}`);
+            storeLog.info('🏭 Starting data preparation', { date: dateStr, candleCount: rawCandles?.length || 0 });
+
+            // 🔥 CRITICAL FIX: Reset store state to prevent "Ghost Candles" from previous session
+            // This ensures no data pollution (e.g., ADRO candles appearing in INCO chart)
+            storeLog.info('🧹 Clearing previous session state');
+            reset();
+            // Re-set isPreparingData because reset() clears it
+            set({ isPreparingData: true, selectedDate: dateStr });
+
 
             return new Promise((resolve) => {
                 // 1. Spawn Worker A (Data Administrator)
@@ -656,7 +687,7 @@ export const useSimulationStore = create<SimulationState>()(
                     const { status, payload, error } = event.data;
 
                     if (status === 'ERROR' || error) {
-                        console.error('[Store] ❌ Worker A Error:', error);
+                        storeLog.error('❌ Worker A failed', { error });
                         set({ isPreparingData: false });
                         loaderWorker.terminate();
                         resolve({ historyCount: 0, simCount: 0, error: error || 'Worker A Error' });
@@ -665,16 +696,27 @@ export const useSimulationStore = create<SimulationState>()(
 
                     if (status === 'SUCCESS' && payload) {
                         const { history, simulation, metadata } = payload;
-                        console.log(`[Store] 📦 Data Ready: ${history.length} History, ${simulation.length} Sim`);
-                        console.log(`[Store] ℹ️ Metadata:`, metadata);
+                        storeLog.info('📦 Data received from Worker A', {
+                            historyCount: history.length,
+                            simCount: simulation.length,
+                            metadata
+                        });
 
                         // 3. Update Store
                         set((state) => {
                             state.selectedDate = dateStr;
 
+                            // 🔥 CRITICAL: Sort history by time BEFORE loading to chart!
+                            // Source JSON files may have unsorted data
+                            const sortedHistory = [...history].sort((a: any, b: any) => {
+                                const timeA = typeof a.t === 'number' ? a.t : new Date(a.t).getTime();
+                                const timeB = typeof b.t === 'number' ? b.t : new Date(b.t).getTime();
+                                return timeA - timeB; // Ascending
+                            });
+
                             // Load History
                             // Wrapper: EnrichedCandle -> ChartCandle
-                            state.candleHistory = history.map((c: any) => ({
+                            state.candleHistory = sortedHistory.map((c: any) => ({
                                 time: c.t / 1000,
                                 open: c.o,
                                 high: c.h,
@@ -684,6 +726,32 @@ export const useSimulationStore = create<SimulationState>()(
 
                             // Load Simulation (Keep enriched format for Physics Engine)
                             state.simulationCandles = simulation;
+
+                            // Initialize Master Blueprint Data
+                            // 🔥 FIX: Initialize baseData with FULL history + simulation for resampling
+                            // This guarantees that even 5m/15m charts have data immediately
+                            // Note: We need to convert WorkerCandle back to ResamplerCandle (ms timestamp)
+                            const fullData = [...sortedHistory, ...simulation].map((c: any) => ({
+                                time: c.t,
+                                open: c.o,
+                                high: c.h,
+                                low: c.l,
+                                close: c.c,
+                                volume: c.v || 0,
+                                metadata: { isPartial: false }
+                            }));
+
+                            // 🔥 CRITICAL: Sort baseData too! This is the master source for all resampling
+                            const sortedBaseData = fullData.sort((a, b) => {
+                                const timeA = typeof a.time === 'number' ? a.time : new Date(a.time).getTime();
+                                const timeB = typeof b.time === 'number' ? b.time : new Date(b.time).getTime();
+                                return timeA - timeB;
+                            });
+
+                            state.baseData = sortedBaseData;
+                            state.cachedIntervals = new Map(); // Clear cache
+                            state.cachedIntervals.set('1m', sortedBaseData); // Seed 1m cache
+
                             state.currentCandle = null;
                             state.isPreparingData = false;
                         });
@@ -802,6 +870,13 @@ export const useSimulationStore = create<SimulationState>()(
                     devLog('RESAMPLING', `[Store] 📦 Filtered ${cached.length - completeCandles.length} partial candles from cache`);
                 }
 
+                // 🔥 CRITICAL: Sort by time (ascending) - chart library REQUIRES this!
+                const sortedCandles = completeCandles.sort((a, b) => {
+                    const timeA = typeof a.time === 'number' ? a.time : new Date(a.time).getTime();
+                    const timeB = typeof b.time === 'number' ? b.time : new Date(b.time).getTime();
+                    return timeA - timeB; // Ascending
+                });
+
                 // 🚀 FIX 2: Sync state, chart, and worker
                 set((state) => {
                     devLog('RESAMPLING', `[Store→switchInterval] 🔄 Using CACHED data for ${targetInterval}`);
@@ -812,7 +887,7 @@ export const useSimulationStore = create<SimulationState>()(
                     // sourceInterval stays unchanged - it's the original data interval
                     // Update chart history with resampled candles
                     // 🔥 FIX: Don't divide if time is already in seconds (< 10 billion)
-                    state.candleHistory = completeCandles.map((c: ResamplerCandle) => {
+                    state.candleHistory = sortedCandles.map((c: ResamplerCandle) => {
                         const timeInMs = typeof c.time === 'number' ? c.time : new Date(c.time).getTime();
                         // Force to seconds (Unix timestamp)
                         const timeInSeconds = timeInMs > 10_000_000_000 ? Math.floor(timeInMs / 1000) : Math.floor(timeInMs);
@@ -861,9 +936,16 @@ export const useSimulationStore = create<SimulationState>()(
                     targetInterval
                 );
 
+                // 🔥 CRITICAL: Sort resampled data before caching!
+                const sortedResampled = resampled.sort((a, b) => {
+                    const timeA = typeof a.time === 'number' ? a.time : new Date(a.time).getTime();
+                    const timeB = typeof b.time === 'number' ? b.time : new Date(b.time).getTime();
+                    return timeA - timeB;
+                });
+
                 // Cache result and sync state
                 set((state) => {
-                    state.cachedIntervals.set(targetInterval, resampled);
+                    state.cachedIntervals.set(targetInterval, sortedResampled);
                     state.baseInterval = targetInterval;  // Update displayed interval
                     // sourceInterval UNCHANGED - still points to original data
 
@@ -872,8 +954,8 @@ export const useSimulationStore = create<SimulationState>()(
                     // We want History = [Full, Full, Full]
                     // And Current = Partial (if exists)
 
-                    const completeCandles = resampled.filter(c => !c.metadata?.isPartial);
-                    const partialCandles = resampled.filter(c => c.metadata?.isPartial);
+                    const completeCandles = sortedResampled.filter(c => !c.metadata?.isPartial);
+                    const partialCandles = sortedResampled.filter(c => c.metadata?.isPartial);
 
                     if (partialCandles.length > 0) {
                         devLog('RESAMPLING', `[Store] 🧊 Restoring active candle from partial switch data`);
