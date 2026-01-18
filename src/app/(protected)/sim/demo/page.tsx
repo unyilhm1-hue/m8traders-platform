@@ -42,6 +42,8 @@ function SimDemoPageContent() {
     // ✅ Track initialization to prevent loop
     const hasInitialized = useRef(false);
 
+
+
     // ✅ Subscribe to real-time price from simulation store
     const currentPrice = useCurrentPrice();
 
@@ -102,7 +104,97 @@ function SimDemoPageContent() {
         detectAvailableData();
     }, []); // Run once on mount (updates store if needed)
 
-    // 🚀 AUTO-LOAD DATA ON PAGE MOUNT WITH SMART BUFFERING
+    // 🔥 AUTO-PAUSE WORKER ON INTERVAL CHANGE
+    // Prevents worker from sending 1m updates when chart displays 2m/5m/etc
+    const currentInterval = useSimulationStore((s) => s.baseInterval);
+    const prevInterval = useRef(''); // Start empty to prevent mount trigger
+    const activeIntervalRef = useRef(currentInterval); // 🛡️ GUARD: Track active interval for validation
+
+    // 🔥 Update active interval ref whenever interval changes
+    useEffect(() => {
+        activeIntervalRef.current = currentInterval;
+    }, [currentInterval]);
+
+    useEffect(() => {
+        // 🛑 LAYER 1: KILL SWITCH - Stop worker BEFORE any processing
+        // Guard: Only trigger on actual interval changes (not initial mount)
+        if (prevInterval.current !== currentInterval && engine && hasInitialized.current) {
+            console.log(
+                `[SimDemoPage] 🛑 KILL SWITCH ACTIVATED\n` +
+                `   Interval Change: ${prevInterval.current} → ${currentInterval}\n` +
+                `   Action: Pausing worker to prevent zombie ticks...`
+            );
+
+            // 🛑 CRITICAL: Pause worker IMMEDIATELY before any other operations
+            // This prevents the worker from sending stale interval data during transition
+            engine.pause();
+
+            // 🧹 LAYER 1.5: FLUSH QUEUE - Remove stale ticks from store queue
+            // Any ticks sent by worker just before pause are now "zombies". Kill them.
+            useSimulationStore.getState().clearTickQueue();
+
+            console.log(`[SimDemoPage] ✅ Worker paused & queues flushed`);
+
+            // 🧹 LAYER 2: CLEANUP - Reset chart state for clean transition
+            const store = useSimulationStore.getState();
+            const baseData = store.baseData;
+
+            console.log(`[SimDemoPage] 🧹 Clearing chart state for clean transition...`);
+
+            if (baseData && baseData.length > 0) {
+                const toEnrichedCandle = (c: any) => ({
+                    t: typeof c.time === 'string' ? new Date(c.time).getTime() : c.time, // 🔥 FIX: Ensure Number for Worker
+                    o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume || 0,
+                    isBullish: c.close >= c.open,
+                    bodyRatio: Math.abs(c.close - c.open) / (c.high - c.low || 1),
+                    upperWickRatio: (c.high - Math.max(c.open, c.close)) / (c.high - c.low || 1),
+                    lowerWickRatio: (Math.min(c.open, c.close) - c.low) / (c.high - c.low || 1),
+                    pattern: 'doji' as const
+                });
+
+                // 🔥 LOGIC BARU: DYNAMIC TIME SPLIT (Single Source of Truth)
+                // Store sudah memotong candleHistory tepat di anchorTime (via switchInterval).
+                // Kita tinggal mengikuti titik potong tersebut agar tidak ada overlap.
+                const splitIndex = store.candleHistory.length;
+
+                console.log(`[SimDemoPage] 🔗 Syncing with Store History Length: ${splitIndex}`);
+
+                // Safety bounds vs Data Length
+                // splitIndex = Math.min(splitIndex, baseData.length - 1); 
+                // Removed safety bounds that might desync history vs queue
+
+                // 3. Lakukan Slicing dengan Index Dinamis
+                // History gets everything BEFORE split
+                // Queue gets everything FROM split onwards
+                // 🔥 Optimization: Use store.candleHistory directly for history buffer to avoid re-mapping if possible
+                // But for now, ensuring format consistency via toEnrichedCandle on baseData slice is safer.
+
+                const historyBuffer = baseData.slice(0, splitIndex).map(toEnrichedCandle);
+                const simulationQueue = baseData.slice(splitIndex).map(toEnrichedCandle);
+
+                console.log(
+                    `[SimDemoPage] 🔄 Reinit Buffers:\n` +
+                    `   Anchor Time: ${store.tempAnchorTime ? new Date(store.tempAnchorTime * 1000).toLocaleString() : 'N/A'}\n` +
+                    `   Split Index: ${splitIndex}\n` +
+                    `   History Size: ${historyBuffer.length}\n` +
+                    `   Queue Size: ${simulationQueue.length}`
+                );
+
+                const queueStartPayload = simulationQueue.length > 0 ? simulationQueue[0].t : 0;
+                console.log(`[SimDemoPage] ⏭ Queue Start: ${new Date(queueStartPayload).toLocaleString()}`);
+
+                // ▶️ LAYER 3: RESTART - Reinitialize worker with new interval
+                engine.initWithBuffers({ historyBuffer, simulationQueue, interval: currentInterval });
+            }
+
+            console.log(`[SimDemoPage] ✅ Worker reinitialized for ${currentInterval} - Ready for playback`);
+
+            // 🔥 Update prevInterval AFTER successful reinit
+            prevInterval.current = currentInterval;
+        }
+    }, [currentInterval, engine]);
+
+    // 🚀 AUTO-LOAD DATA ON PAGE MOUNT WITH HYBRID STITCHING
     useEffect(() => {
         // Wait until ticker and date are detected
         if (!selectedTicker || !targetDate) {
@@ -112,71 +204,61 @@ function SimDemoPageContent() {
 
         const initSimulation = async () => {
             try {
-                // 🔥 NEW: Use smart buffering API
-                console.log('[SimDemoPage] Fetching simulation data with smart buffering...');
+                console.log('[SimDemoPage] \ud83d\udd25 Initializing with hybrid stitcher (direct store method)...');
 
-                // 🔥 DYNAMIC: Use auto-detected values
-                const ticker = selectedTicker;
-                const date = targetDate;
-                const interval = '1m';  // TODO: Support interval switching from availableIntervals
-
-                const response = await fetch(
-                    `/api/simulation/load?ticker=${ticker}&date=${date}&interval=${interval}`
+                // \ud83d\udd25 NEW: Use store method directly (includes hybrid stitching!)
+                await useSimulationStore.getState().loadWithSmartBuffer(
+                    selectedTicker,
+                    new Date(targetDate),
+                    '1m'
                 );
 
-                const result = await response.json();
+                // 🔥 FIX: Get FRESH state after async load
+                const { baseData, candleHistory } = useSimulationStore.getState();
 
-                if (!result.success || !result.data) {
-                    console.error('[SimDemoPage] Failed to load data:', result.error);
-                    throw new Error(result.error || 'Failed to fetch simulation data');
-                }
+                console.log(`✅ Hybrid data loaded:`);
+                console.log(`   - Base data: ${baseData.length} candles`);
+                console.log(`   - Chart history: ${candleHistory.length} candles`);
 
-                const { historyBuffer, simulationQueue, interval: loadedInterval, wasAggregated } = result.data;
-
-                console.log(`✅ [SimDemoPage] Smart buffering data loaded:`);
-                console.log(`   - History: ${historyBuffer.length} candles (for context warm-up)`);
-                console.log(`   - Simulation: ${simulationQueue.length} candles (to animate)`);
-                console.log(`   - Interval: ${loadedInterval}`);
-                console.log(`   - Aggregated: ${wasAggregated ? 'Yes' : 'No'}`);
-
-                // 🚀 FIX 1: Hydrate baseData and baseInterval for Master Blueprint
-                const store = useSimulationStore.getState();
-
-                // Combine buffers for baseData (needed for resampling)
-                const allBaseData = [...historyBuffer, ...simulationQueue];
-
-                useSimulationStore.setState({
-                    baseData: allBaseData,
-                    baseInterval: loadedInterval as any,
-                    currentTicker: ticker,
-                    bufferData: historyBuffer
+                // Extract buffers for worker
+                // Split baseData into history (first 200) and simulation (rest)
+                // 🔥 Convert to EnrichedCandle format for worker
+                const toEnrichedCandle = (c: any) => ({
+                    t: c.time, // 🔥 FIX: baseData.time is ALREADY in milliseconds (ResamplerCandle format)
+                    o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume || 0,
+                    isBullish: c.close >= c.open,
+                    bodyRatio: Math.abs(c.close - c.open) / (c.high - c.low || 1),
+                    upperWickRatio: (c.high - Math.max(c.open, c.close)) / (c.high - c.low || 1),
+                    lowerWickRatio: (Math.min(c.open, c.close) - c.low) / (c.high - c.low || 1),
+                    pattern: 'doji' as const
                 });
 
-                // Load history candles to chart (for visual context)
-                if (historyBuffer && historyBuffer.length > 0) {
-                    store.setCandleHistory(historyBuffer);
-                    console.log(`📊 [SimDemoPage] Loaded ${historyBuffer.length} history + base data hydrated`);
-                }
+                const historyBuffer = baseData.slice(0, 200).map(toEnrichedCandle);
+                const simulationQueue = baseData.slice(200).map(toEnrichedCandle);
 
-                // 🔥 NEW: Send split buffers to worker via initWithBuffers
-                if (engine && simulationQueue.length > 0) {
-                    console.log(`📨 [SimDemoPage] Sending split buffers to worker...`);
+                // 📊 Log date range for verification
+                console.log(`[SimDemoPage] 📊 Data Summary:`);
+                console.log(`   - Total candles: ${baseData.length}`);
+                console.log(`   - Date range: ${new Date(baseData[0].time).toLocaleString('id-ID')} → ${new Date(baseData[baseData.length - 1].time).toLocaleString('id-ID')}`);
+                console.log(`   - History buffer: ${historyBuffer.length} candles (chart initial load)`);
+                console.log(`   - Simulation queue: ${simulationQueue.length} candles (worker playback)`);
+
+                // Note: Replay mode trim happens in store (useSimulationStore.loadWithSmartBuffer)
+                // Chart will automatically load trimmed candleHistory (200 candles)
+
+                // Send to worker (always init, even if queue empty)
+                if (engine) {
+                    console.log(`📨 [SimDemoPage] Sending buffers to worker...`);
                     engine.initWithBuffers({
                         historyBuffer,
                         simulationQueue,
-                        interval: loadedInterval
+                        interval: '1m'
                     });
-
-                    // Set ready state for auto-play
                     setIsWorkerDataReady(true);
-                } else if (!engine) {
-                    console.warn('⚠️ [SimDemoPage] Engine not ready yet');
-                } else {
-                    console.warn('⚠️ [SimDemoPage] No simulation candles to send');
                 }
 
             } catch (err) {
-                console.error('❌ [SimDemoPage] Simulation Init Error:', err);
+                console.error('❌ [SimDemoPage] Init Error:', err);
             }
         };
 
@@ -196,14 +278,25 @@ function SimDemoPageContent() {
             requestIdleCallback(() => {
                 initSimulation();
                 hasInitialized.current = true;
+                // 🔥 FIX: Set prevInterval AFTER initial load to prevent false reinit
+                prevInterval.current = currentInterval;
             }, { timeout: 2000 }); // Fallback after 2s if browser stays busy
         } else {
             // Fallback for browsers without requestIdleCallback (Safari)
             setTimeout(() => {
                 initSimulation();
                 hasInitialized.current = true;
+                // 🔥 FIX: Set prevInterval AFTER initial load to prevent false reinit
+                prevInterval.current = currentInterval;
             }, 100);
         }
+
+        // \ud83d\udd25 CLEANUP: Free memory when user leaves page
+        return () => {
+            console.log('\ud83d\udc4b [SimDemoPage] Unmounting...');
+            // Note: Keep LRU cache intact for quick return to page
+            // Only clear if implementing aggressive cleanup mode
+        };
     }, [isReady, engine, selectedTicker, targetDate]); // 🔥 UPDATED: Added targetDate dependency
 
     // ✅ FIX: Event-driven auto-play (no race condition)
@@ -261,7 +354,7 @@ function SimDemoPageContent() {
                         <div className="pt-3 border-t border-[var(--bg-tertiary)]">
                             <div className="text-xs text-[var(--text-tertiary)] mb-1">Current Price</div>
                             <div className="text-2xl font-bold text-[var(--text-primary)]">
-                                Rp {currentPrice.toLocaleString('id-ID', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                                Rp {(currentPrice || 0).toLocaleString('id-ID', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                             </div>
                         </div>
                     </div>

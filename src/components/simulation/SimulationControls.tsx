@@ -13,12 +13,12 @@ import { Select } from '../ui/Select';
 
 export function SimulationControls() {
     const [isModalOpen, setIsModalOpen] = useState(false);
-    const [isPlaying, setIsPlaying] = useState(false);
+    // const [isPlaying, setIsPlaying] = useState(false); // ❌ Removed local state
     const [speed, setSpeed] = useState(1);
     const selectedDate = useSelectedDate();
 
     // ✅ Get shared engine from context (no duplicate worker!)
-    const { engine } = useSimulationEngineContext();
+    const { engine, isReady } = useSimulationEngineContext();
 
     const speedOptions = [
         { label: '1x', value: '1' },
@@ -32,18 +32,19 @@ export function SimulationControls() {
         // TODO: Initialize worker with simulation candles from store
     };
 
+    const isControlsEnabled = !!selectedDate || isReady;
+
     const handlePlayPause = () => {
-        if (!selectedDate) {
+        if (!isControlsEnabled) {
             alert('Please select a date first');
             return;
         }
 
-        if (isPlaying) {
+        if (engine.isPlaying) {
             engine.pause();
         } else {
             engine.play(speed);
         }
-        setIsPlaying(!isPlaying);
     };
 
     return (
@@ -68,18 +69,18 @@ export function SimulationControls() {
                 {/* Play/Pause */}
                 <button
                     onClick={handlePlayPause}
-                    disabled={!selectedDate}
+                    disabled={!isControlsEnabled}
                     className={`
                         w-8 h-8 flex items-center justify-center rounded-full transition-all
-                        ${isPlaying
+                        ${engine.isPlaying
                             ? 'bg-[var(--accent-primary)] text-white glow-primary hover:bg-[var(--accent-primary)]/90'
                             : 'bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
                         }
                         disabled:opacity-50 disabled:cursor-not-allowed
                     `}
-                    title={isPlaying ? 'Pause [Space]' : 'Play [Space]'}
+                    title={engine.isPlaying ? 'Pause [Space]' : 'Play [Space]'}
                 >
-                    {isPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+                    {engine.isPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
                 </button>
 
                 {/* Speed Selector */}
@@ -92,7 +93,7 @@ export function SimulationControls() {
                     }}
                     options={speedOptions}
                     className="w-[80px]"
-                    disabled={!selectedDate}
+                    disabled={!isControlsEnabled}
                 />
             </div>
 

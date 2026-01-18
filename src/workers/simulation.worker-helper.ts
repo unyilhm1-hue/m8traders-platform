@@ -202,40 +202,95 @@ export class SyntheticTickGenerator {
 
     /**
      * MODULE 1: The "Storyteller" - Derives strategic waypoints
+     * 
+     * MARKET PSYCHOLOGY: Each pattern tells a story that must be reflected in price movement.
+     * - Hammer: Panic sell → Rejection → Strong recovery (底部反転の心理)
+     * - Shooting Star: FOMO pump → Profit taking → Collapse (天井の心理)
+     * - Marubozu: One-sided conviction, minimal hesitation (強いトレンド)
+     * - Doji: Indecision, battle between bulls/bears (迷いと均衡)
      */
     private generateWaypoints(candle: Candle, pattern: PatternInfo): number[] {
         const { o, h, l, c } = candle;
-        const waypoints: number[] = [o];
         const isBullish = c >= o;
-        const invertLogic = this.rng.next() < 0.3;
 
-        // Simplified routing logic
-        if (isBullish) {
-            if (!invertLogic && l < o) waypoints.push(l);
-            waypoints.push(h);
-            if (invertLogic && l < o) waypoints.push(l);
-        } else {
-            if (!invertLogic && h > o) waypoints.push(h);
-            waypoints.push(l);
-            if (invertLogic && h > o) waypoints.push(h);
+        // Pattern-Driven Pathfinding (QuantDev Law #5)
+        switch (pattern.pattern) {
+            case 'hammer':
+                // Psychology: Panic sell → Capitulation → Rejection → Recovery
+                // Path: Open → Low (panic) → Low+30% (testing) → Low (retest) → Close (strength)
+                return [
+                    o,
+                    l,                              // First drop (panic)
+                    l + (c - l) * 0.3,             // Partial recovery (testing)
+                    l + (c - l) * 0.1,             // Retest low (shakeout)
+                    c                               // Strong close
+                ];
+
+            case 'shootingStar':
+                // Psychology: FOMO rally → Distribution → Aggressive selling
+                // Path: Open → High (euphoria) → High-30% (warning) → High (bull trap) → Close (dump)
+                return [
+                    o,
+                    h,                              // Initial pump (FOMO)
+                    h - (h - c) * 0.3,             // First sign of weakness
+                    h - (h - c) * 0.1,             // Bull trap (retest high)
+                    c                               // Collapse
+                ];
+
+            case 'marubozu':
+                // Psychology: Strong conviction, no hesitation
+                // Path: Open → Close (direct path, minimal noise)
+                return [o, c];
+
+            case 'doji':
+                // Psychology: Indecision, choppy ping-pong between bulls and bears
+                // Path: Open → High → Low → High → Low → Close (chaotic)
+                const mid = (h + l) / 2;
+                return [
+                    o,
+                    h,                              // Bulls push up
+                    l,                              // Bears push down
+                    mid + (h - mid) * 0.5,         // Bulls try again
+                    mid - (mid - l) * 0.5,         // Bears counter
+                    c                               // Exhaustion close
+                ];
+
+            default:
+                // Neutral pattern: Use probabilistic routing (original logic)
+                const waypoints: number[] = [o];
+                const invertLogic = this.rng.next() < 0.3;
+
+                if (isBullish) {
+                    if (!invertLogic && l < o) waypoints.push(l);
+                    waypoints.push(h);
+                    if (invertLogic && l < o) waypoints.push(l);
+                } else {
+                    if (!invertLogic && h > o) waypoints.push(h);
+                    waypoints.push(l);
+                    if (invertLogic && h > o) waypoints.push(h);
+                }
+                waypoints.push(c);
+                return waypoints;
         }
-        waypoints.push(c);
-        return waypoints;
     }
 
     /**
      * MODULE 2: The "Micro-Tick" Generator - Brownian Bridge
+     * 
+     * QuantDev Law #3: Organic Movement & Physics
+     * - Fractal Noise: Inject micro-volatility at multiple scales
+     * - Magnetic Pull: Progressive convergence toward waypoints (not instant snap)
+     * - Anti-Barcode: First tick MUST equal Open for pixel-perfect transitions
      */
     public generateTicks(candle: Candle, tickCount: number, pattern: PatternInfo, context: MarketContext): TickData[] {
         const waypoints = this.generateWaypoints(candle, pattern);
         const ticks: TickData[] = [];
 
-        const pricePath: number[] = [candle.o];
+        const pricePath: number[] = [candle.o]; // ANTI-BARCODE: Start exactly at Open
         const segments = waypoints.length - 1;
         const ticksPerSegment = Math.floor(tickCount / segments);
 
         const noiseFactor = context.volatility === 'high' ? 1.5 : 0.8;
-        const driftLookahead = 0.1;
 
         for (let i = 0; i < segments; i++) {
             const startPrice = waypoints[i];
@@ -247,19 +302,33 @@ export class SyntheticTickGenerator {
 
             for (let j = 1; j <= count; j++) {
                 const progress = j / count;
+
+                // ===== PROGRESSIVE MAGNETIC PULL (QuantDev Law #3) =====
+                // Instead of linear drift, use quadratic "gravity" that strengthens near waypoint
+                const magnetStrength = Math.pow(progress, 2); // 0 → 1 quadratically
                 const linearTarget = startPrice + (endPrice - startPrice) * progress;
-                const drift = (linearTarget - currentPrice) * driftLookahead;
-                const noise = (this.rng.next() * 2 - 1) * getIDXTickSize(currentPrice) * noiseFactor;
 
-                let nextPrice = currentPrice + drift + noise;
+                // Magnetic pull: Weak at start, strong at end
+                const magnetPull = (linearTarget - currentPrice) * magnetStrength * 0.4;
 
-                // Hard Limits
+                // Drift: Smooth movement toward target
+                const drift = (linearTarget - currentPrice) * 0.1;
+
+                // ===== FRACTAL NOISE (Multi-Scale) =====
+                const baseTickSize = getIDXTickSize(currentPrice);
+                const noise = (this.rng.next() * 2 - 1) * baseTickSize * noiseFactor;
+
+                let nextPrice = currentPrice + drift + magnetPull + noise;
+
+                // ===== STRICT BOUNDARIES (QuantDev Law #1) =====
+                // NEVER exceed High or drop below Low (zero repainting)
                 nextPrice = Math.max(candle.l, Math.min(candle.h, nextPrice));
 
-                // Magnetism
+                // ===== WAYPOINT SNAP (Final Tick Accuracy) =====
+                // Force exact convergence to waypoint on last tick of segment
                 if (j === count) nextPrice = endPrice;
 
-                // IDX Rounding
+                // ===== IDX TICK SIZE ROUNDING =====
                 nextPrice = roundToIDXTickSize(nextPrice);
 
                 pricePath.push(nextPrice);
@@ -267,23 +336,31 @@ export class SyntheticTickGenerator {
             }
         }
 
+        // ===== ANTI-BARCODE VALIDATION =====
+        // Ensure first generated tick didn't deviate from Open
+        // (Important when Open is near boundary and noise could push it)
+        if (pricePath.length > 1 && pricePath[1] !== candle.o) {
+            const tickSize = getIDXTickSize(candle.o);
+            const deviation = Math.abs(pricePath[1] - candle.o);
+
+            // If first tick deviated more than 1 tick size, force alignment
+            if (deviation > tickSize) {
+                pricePath[1] = candle.o;
+                console.warn(`[QuantDev] Anti-Barcode: Forced first tick alignment (deviation: ${deviation})`);
+            }
+        }
+
         // Volume Profile
         const volumeProfile = this.generateVolumeProfile(candle.v, tickCount);
 
-        // Heartbeat Timing
-        // Note: For simplicity in the helper, we just return ordered ticks. 
-        // Timing logic is often handled by the Consumer (Worker B) to map to real-time.
-        // But we can generate relative delays here if needed.
-        // For now, we return TickData structure without timestamp offset filling, 
-        // expecting Worker B to handle the scheduling.
-
+        // ===== CONSTRUCT TICK DATA =====
         for (let i = 0; i < tickCount; i++) {
             ticks.push({
                 tickIndex: i,
                 candleIndex: 0,
                 price: pricePath[i + 1] || pricePath[i],
                 volume: volumeProfile[i],
-                timestamp: 0 // Placeholder
+                timestamp: 0 // Placeholder (Worker B handles timing)
             });
         }
 

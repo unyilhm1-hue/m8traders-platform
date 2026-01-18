@@ -325,15 +325,21 @@ function aggregateBucket(bucket: Candle[], expectedCount?: number): ResampledCan
 
     // 🔥 FIX #4: Add metadata even for single bucket
     if (bucket.length === 1) {
-        const result = bucket[0];
+        const sourceCandle = bucket[0];
+        const result: ResampledCandle = {
+            time: parseTime(sourceCandle.time),  // 🔥 FIX: Ensure time is numeric
+            open: sourceCandle.open,
+            high: sourceCandle.high,
+            low: sourceCandle.low,
+            close: sourceCandle.close,
+            volume: sourceCandle.volume
+        };
+
         if (expectedCount !== undefined) {
-            return {
-                ...result,
-                metadata: {
-                    isPartial: bucket.length < expectedCount,
-                    candleCount: bucket.length,
-                    expectedCount
-                }
+            result.metadata = {
+                isPartial: bucket.length < expectedCount,
+                candleCount: bucket.length,
+                expectedCount
             };
         }
         return result;
@@ -351,7 +357,7 @@ function aggregateBucket(bucket: Candle[], expectedCount?: number): ResampledCan
     }
 
     const result: ResampledCandle = {
-        time: bucket[0].time,                          // First candle's time
+        time: parseTime(bucket[0].time),               // 🔥 FIX: Ensure time is always number (ms)
         open: bucket[0].open,                          // First candle's open
         close: bucket[bucket.length - 1].close,        // Last candle's close
         high,                                          // Highest high

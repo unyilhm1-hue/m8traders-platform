@@ -380,7 +380,7 @@ class SimulationEngine {
         const candle = this.candles[this.currentCandleIndex];
         const timestamp = candle.t + tick.targetTime;
 
-        this.updateAggregatedCandle(tick.price, tick.volume);
+        this.updateAggregatedCandle(tick.price);
 
         postMessage({
             type: 'TICK',
@@ -428,17 +428,15 @@ class SimulationEngine {
             open: candle.o,
             high: candle.o,
             low: candle.o,
-            close: candle.o,
-            v: 0 // 🔥 NEW: Track volume (normalized key 'v')
+            close: candle.o
         };
     }
 
-    private updateAggregatedCandle(price: number, volume: number) {
+    private updateAggregatedCandle(price: number) {
         if (!this.currentAggregatedCandle) return;
         this.currentAggregatedCandle.high = Math.max(this.currentAggregatedCandle.high, price);
         this.currentAggregatedCandle.low = Math.min(this.currentAggregatedCandle.low, price);
         this.currentAggregatedCandle.close = price;
-        this.currentAggregatedCandle.v = (this.currentAggregatedCandle.v || 0) + volume; // 🔥 NEW: Accumulate
     }
 
     private broadcastCandleUpdate(source: string) {

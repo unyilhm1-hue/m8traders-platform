@@ -28,14 +28,14 @@ export function SimulationEngineProvider({ children }: SimulationEngineProviderP
         playbackSpeed: 1,
     });
 
-    // 🔥 FIX: Sync Worker Interval when Store Interval changes
-    // This allows the Worker to know about 1m -> 5m switches
-    const baseInterval = useSimulationStore((s) => s.baseInterval);
-    useEffect(() => {
-        if (engine.isReady && baseInterval) {
-            engine.setInterval(baseInterval);
-        }
-    }, [engine.isReady, baseInterval, engine.setInterval]);
+    // 🔥 DISABLED: Interval sync now handled in demo page after data loads
+    // This was triggering worker init BEFORE data ready, causing "Candle=false" error
+    // const baseInterval = useSimulationStore((s) => s.baseInterval);
+    // useEffect(() => {
+    //     if (engine.isReady && baseInterval) {
+    //         engine.setInterval(baseInterval);
+    //     }
+    // }, [engine.isReady, baseInterval, engine.setInterval]);
 
     const value: SimulationEngineContextValue = {
         engine,

@@ -9,6 +9,7 @@ import {
     type ISeriesApi,
     type CandlestickData,
     type Time,
+    type UTCTimestamp,
 } from 'lightweight-charts';
 import { useSimulationStore, normalizeTimestamp } from '@/stores/useSimulationStore';
 import { simTelemetry } from '@/lib/telemetry';
@@ -29,6 +30,7 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const mainChartRef = useRef<IChartApi | null>(null);
     const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+    const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null); // 🔥 NEW: Volume Ref
 
     // 🔥 RACE CONDITION FIX: Guard against updates before chart is ready
     const isChartReady = useRef<boolean>(false);
@@ -41,8 +43,12 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
     const historyLoadedLengthRef = useRef<number>(0); // 🔥 New ref for length tracking
     const lastLoadedIntervalRef = useRef<string>('1m');
     const lastUpdateTimeRef = useRef<number>(0);
-    const pendingUpdateRef = useRef<CandlestickData | null>(null);
+    // 🔥 FIX: Allow extra properties (like volume/value) in pending update
+    const pendingUpdateRef = useRef<(CandlestickData & { value?: number, color?: string }) | null>(null);
     const isAtLiveEdgeRef = useRef<boolean>(true); // 🔥 Track if user is at the latest data
+
+    // 🛡️ LAYER 3 GUARD: Track active interval with Ref to prevent stale closure
+    const activeIntervalRef = useRef<string>('1m');
 
     // Ambil history & indicators dari store
     const candleHistory = useSimulationStore((state) => state.candleHistory);
@@ -82,6 +88,17 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
                 secondsVisible: false,
                 borderColor: '#2B2B43',
                 minBarSpacing: 8,
+                // 🔥 CRITICAL: Force UTC timestamp mode (prevents BusinessDay object conversion)
+                // Without this, lightweight-charts may convert Unix timestamps to BusinessDay objects internally
+                tickMarkFormatter: (time: UTCTimestamp) => {
+                    const date = new Date(time * 1000);
+                    return date.toLocaleString('id-ID', {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    });
+                },
             },
             rightPriceScale: {
                 borderColor: '#2B2B43',
@@ -104,8 +121,26 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
             wickDownColor: '#F23645',
         });
 
+        // 🔥 NEW: Volume Series (Separate Scale at Bottom)
+        const volumeSeries = chart.addHistogramSeries({
+            color: '#26a69a',
+            priceFormat: {
+                type: 'volume',
+            },
+            priceScaleId: 'volume', // Use named scale for configuration
+        });
+
+        // Configure Volume Scale (Bottom 20%)
+        chart.priceScale('volume').applyOptions({
+            scaleMargins: {
+                top: 0.8,
+                bottom: 0,
+            },
+        });
+
         mainChartRef.current = chart;
         candleSeriesRef.current = newSeries;
+        volumeSeriesRef.current = volumeSeries;
 
         // 🔥 Update Context
         setChart(chart);
@@ -141,9 +176,10 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
             // 🔥 CRITICAL FIX: Fully destroy chart to prevent ghosting / double labels
             if (mainChartRef.current) {
                 mainChartRef.current.remove();
-                mainChartRef.current = null;
             }
+            mainChartRef.current = null;
             candleSeriesRef.current = null;
+            volumeSeriesRef.current = null;
 
             setChart(null);
             setMainSeries(null);
@@ -165,6 +201,12 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
     // --- B. LOAD HISTORY ---
     const currentInterval = useSimulationStore((s) => s.baseInterval);
     const prevIntervalRef = useRef<string>(currentInterval);
+
+    // 🛡️ LAYER 3 GUARD: Sync activeIntervalRef whenever interval changes
+    useEffect(() => {
+        activeIntervalRef.current = currentInterval;
+        console.log(`[Chart] 🛡️ Active interval ref updated: ${currentInterval}`);
+    }, [currentInterval]);
 
     // --- B. HISTORY LOADING EFFECT (Load Chart Data) ---
     useEffect(() => {
@@ -227,29 +269,67 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
             // Sanitizer normalizes time/t/timestamp → guaranteed sorted & deduplicated output
             const sortedHistory = sanitizeDataForChart(candleHistory);
 
-            let candleData;
+            // 🔬 DIAGNOSTIC: Check what sanitizer actually returned
+            console.log('[Chart] 🧪 Sanitizer output type check:', {
+                first: sortedHistory[0],
+                firstTimeType: typeof sortedHistory[0]?.time,
+                firstTimeValue: sortedHistory[0]?.time
+            });
+
+            let candleData: any[]; // 🔥 FIX: Declare variable
             if (total > WINDOW_THRESHOLD) {
                 // Large dataset: only load recent window
                 const startIdx = Math.max(0, total - WINDOW_SIZE);
                 const windowedHistory = sortedHistory.slice(startIdx);
-                candleData = windowedHistory.map((c) => ({
-                    time: c.time as Time,
-                    open: c.open,
-                    high: c.high,
-                    low: c.low,
-                    close: c.close,
+                candleData = windowedHistory.map((c) => {
+                    const timeValue = typeof c.time === 'number' ? c.time : Number(c.time);
+                    return {
+                        time: timeValue as UTCTimestamp,  // Use UTCTimestamp type
+                        open: c.open,
+                        high: c.high,
+                        low: c.low,
+                        close: c.close,
+                    };
+                });
+
+                // Volume Data Map
+                const volumeData = windowedHistory.map((c) => ({
+                    time: (typeof c.time === 'number' ? c.time : Number(c.time)) as UTCTimestamp,
+                    value: c.value,
+                    color: c.close >= c.open ? '#089981' : '#F23645',
                 }));
+                volumeSeriesRef.current?.setData(volumeData);
+
                 console.log(`[Chart] 🪟 Windowed load: ${windowedHistory.length} of ${total} candles`);
             } else {
                 // Small dataset: load all
-                candleData = sortedHistory.map((c) => ({
-                    time: c.time as Time,
-                    open: c.open,
-                    high: c.high,
-                    low: c.low,
-                    close: c.close,
+                candleData = sortedHistory.map((c) => {
+                    const timeValue = typeof c.time === 'number' ? c.time : Number(c.time);
+                    return {
+                        time: timeValue as UTCTimestamp,  // Use UTCTimestamp type
+                        open: c.open,
+                        high: c.high,
+                        low: c.low,
+                        close: c.close,
+                    };
+                });
+
+                // Volume Data Map
+                const volumeData = sortedHistory.map((c) => ({
+                    time: (typeof c.time === 'number' ? c.time : Number(c.time)) as UTCTimestamp,
+                    value: c.value,
+                    color: c.close >= c.open ? '#089981' : '#F23645',
                 }));
+                volumeSeriesRef.current?.setData(volumeData);
             }
+
+            // 🔬 DIAGNOSTIC: Check candleData before setData
+            console.log('[Chart] 🧪 CandleData before setData:', {
+                first: candleData[0],
+                firstTimeType: typeof candleData[0]?.time,
+                firstTimeValue: candleData[0]?.time,
+                firstTimeIsNumber: Number.isFinite(candleData[0]?.time)
+            });
 
             // 🔬 DEBUG: Log sample of sorted data to verify ordering
             if (sortedHistory.length > 0) {
@@ -363,6 +443,16 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
                 });
 
                 candleSeriesRef.current.update(update);
+
+                // 🔥 NEW: Update Volume
+                if (volumeSeriesRef.current && update.value !== undefined) {
+                    volumeSeriesRef.current.update({
+                        time: update.time,
+                        value: update.value,
+                        color: update.close >= update.open ? '#089981' : '#F23645'
+                    });
+                }
+
                 lastUpdateTimeRef.current = update.time as number;
 
                 console.log('[Chart] ✅ Update successful');
@@ -456,18 +546,51 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
                 return;
             }
 
+            // 🛡️ LAYER 3 GUARD: Reject zombie ticks from old interval
+            // Uses Ref instead of state to prevent stale closure issues
+            // The subscription callback captures variables at creation time,
+            // so using state directly would read old values. Ref always reads fresh.
+            const tickInterval = state.baseInterval;
+            const expectedInterval = activeIntervalRef.current;
+
+            if (tickInterval !== expectedInterval) {
+                console.warn(
+                    `[Chart] 🛡️ GUARD: Rejected zombie tick from interval=${tickInterval} ` +
+                    `(Active: ${expectedInterval})`
+                );
+                return;
+            }
+
             // 🔥 FIX: currentCandle is already aggregated by bucket logic in store!
             // No need to validate timestamps - store handles UPDATE vs CREATE
-            let time = currentCandle.time; // Already in seconds, already snapped to interval grid
+            let time: any = currentCandle.time; // Start as any to allow object detection
 
             // 🔥 CRITICAL FIX: Ensure time is a NUMBER, not an object!
             // Lightweight-charts error: "last time=[object Object]" means time is not primitive
             if (typeof time !== 'number') {
                 console.error('[Chart] ❌ Time is not a number!', { time, type: typeof time });
-                // Try to extract number
-                time = Number(time);
-                if (isNaN(time)) {
-                    console.error('[Chart] ❌ Cannot convert time to number, skipping');
+
+                // 🔥 NEW: Try to extract from BusinessDay or Date objects
+                if (time && typeof time === 'object') {
+                    if (time instanceof Date) {
+                        time = Math.floor(time.getTime() / 1000);
+                        console.log('[Chart] 📅 Converted Date object to timestamp:', time);
+                    } else if ('year' in time && 'month' in time && 'day' in time) {
+                        // BusinessDay format
+                        const businessDate = new Date(Date.UTC(time.year, time.month - 1, time.day));
+                        time = Math.floor(businessDate.getTime() / 1000);
+                        console.log('[Chart] 📊 Converted BusinessDay object to timestamp:', time);
+                    } else {
+                        console.error('[Chart] ❌ Unknown object type, keys:', Object.keys(time));
+                        time = Number(time);
+                    }
+                } else {
+                    // Try to extract number
+                    time = Number(time);
+                }
+
+                if (isNaN(time) || time <= 0) {
+                    console.error('[Chart] ❌ Cannot convert time to valid number, skipping update');
                     return;
                 }
             }
@@ -482,11 +605,12 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
             // 🔥 CRITICAL: Create CLEAN object with ONLY required fields
             // Lightweight-charts REJECTS updates with unknown fields!
             pendingUpdateRef.current = {
-                time: time as Time,  // Now guaranteed to be number
+                time: time as UTCTimestamp,  // Match setData format
                 open: currentCandle.open,
                 high: currentCandle.high,
                 low: currentCandle.low,
                 close: currentCandle.close,
+                value: (currentCandle as any).volume || (currentCandle as any).v, // 🔥 Capture volume
                 // NO OTHER FIELDS! Chart library is strict
             };
             if (rafId === null) {

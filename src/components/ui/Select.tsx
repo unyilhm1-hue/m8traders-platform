@@ -15,6 +15,7 @@ interface SelectProps {
     placeholder?: string;
     className?: string; // for container
     triggerClassName?: string;
+    disabled?: boolean;
 }
 
 /**
@@ -27,7 +28,8 @@ export function Select({
     options,
     placeholder = 'Select...',
     className = '',
-    triggerClassName = ''
+    triggerClassName = '',
+    disabled = false
 }: SelectProps) {
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -38,6 +40,7 @@ export function Select({
     // Close on click outside
     useEffect(() => {
         function handleClickOutside(event: MouseEvent) {
+            if (disabled) return;
             if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
                 // Check if click is inside the portal dropdown
                 const dropdown = document.getElementById(`select-dropdown-${placeholder.replace(/\s/g, '')}`);
@@ -49,7 +52,7 @@ export function Select({
         }
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, [placeholder]);
+    }, [placeholder, disabled]);
 
     // Calculate position when opening
     useEffect(() => {
@@ -88,13 +91,15 @@ export function Select({
         <div className={`relative ${className}`} ref={containerRef}>
             <button
                 type="button"
-                onClick={() => setIsOpen(!isOpen)}
+                onClick={() => !disabled && setIsOpen(!isOpen)}
+                disabled={disabled}
                 className={`
                     flex items-center justify-between gap-2 px-3 py-1.5 
                     bg-[var(--bg-tertiary)] hover:bg-[var(--bg-hover)] 
                     text-[var(--text-primary)] text-sm rounded transition-colors
                     border border-transparent focus:border-[var(--accent-primary)]
                     min-w-[100px] w-full
+                    disabled:opacity-50 disabled:cursor-not-allowed
                     ${triggerClassName}
                 `}
             >

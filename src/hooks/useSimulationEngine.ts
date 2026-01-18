@@ -25,6 +25,8 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
     const isInitialized = useRef(false);
     // ✅ Reactive ready state
     const [isReady, setIsReady] = useState(false);
+    // ✅ Reactive playback state (Source of Truth)
+    const [isPlaying, setIsPlaying] = useState(false);
 
     // Get store actions
     const pushTick = useSimulationStore((s) => s.pushTick);
@@ -43,10 +45,12 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
 
         try {
             // ✅ NEXT.JS WORKER PATTERN (Option 3)
-            const worker = new Worker(
-                new URL('@/workers/simulation.worker.ts', import.meta.url),
-                { type: 'module' }
-            );
+            // 🚀 CACHE BUSTER: Renamed to chart.worker.ts to force fresh load
+            const worker = new Worker(new URL('../workers/chart.worker.ts', import.meta.url), {
+                type: 'module',
+                name: 'PhysicsEngine',
+            });
+            workerRef.current = worker;
 
             // Message handler
             worker.onmessage = (event: MessageEvent) => {
@@ -107,6 +111,7 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
 
                     case 'PLAYBACK_STATE':
                         console.log(`[useSimulationEngine] Playback state: ${event.data.isPlaying ? 'Playing' : 'Paused'} at ${event.data.speed}x`);
+                        setIsPlaying(event.data.isPlaying); // ✅ Sync state
                         break;
 
                     case 'COMPLETE':
@@ -235,6 +240,12 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
     }) => {
         if (workerRef.current) {
             console.log(`[useSimulationEngine] 🧊 Smart Buffering: ${params.historyBuffer.length} history + ${params.simulationQueue.length} simulation`);
+
+            // 🕵️ PAYLOAD CHECK
+            const lastHist = params.historyBuffer[params.historyBuffer.length - 1];
+            const firstSim = params.simulationQueue[0];
+            console.log(`[useSimulationEngine] 📦 Payload Check: Hist End=${lastHist?.t} (${new Date(lastHist?.t).toLocaleString()}) -> Sim Start=${firstSim?.t} (${new Date(firstSim?.t).toLocaleString()})`);
+
             workerRef.current.postMessage({
                 type: 'INIT_DATA',
                 historyBuffer: params.historyBuffer,
@@ -280,5 +291,6 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
         loadScenario,      // 🆕 Exposed method: Load from IDB
         setInterval,       // 🆕 Exposed method
         isReady,
+        isPlaying,         // ✅ Exposed state
     };
 }

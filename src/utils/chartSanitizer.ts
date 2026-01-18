@@ -35,14 +35,39 @@ export function sanitizeDataForChart(rawData: any[]): ChartDataPoint[] {
         // Deteksi timestamp dari berbagai kemungkinan key
         const rawTime = d.time ?? d.t ?? d.timestamp;
 
-        // Konversi ke Unix Timestamp (Seconds) jika masih String ISO
+        // Konversi ke Unix Timestamp (Seconds) dari berbagai format
         let time: number;
+
         if (typeof rawTime === 'string') {
+            // ISO 8601 string format
             time = Math.floor(new Date(rawTime).getTime() / 1000);
         } else if (typeof rawTime === 'number') {
             // Handle both seconds and milliseconds
-            time = rawTime > 10_000_000_000 ? Math.floor(rawTime / 1000) : rawTime;
+            // 🔥 PARANOID FIX: Any date > Year 2286 (10 Billion) is 100% MS
+            // Also check for 'Ghost' MS timestamps that might have slipped through
+            // 32503680000 = Year 3000. If larger, definitely MS.
+            if (rawTime > 10_000_000_000) {
+                time = Math.floor(rawTime / 1000);
+            } else {
+                time = rawTime;
+            }
+        } else if (rawTime && typeof rawTime === 'object') {
+            // 🔥 NEW: Handle BusinessDay {year, month, day} and Date objects
+            if (rawTime instanceof Date) {
+                // Date object
+                time = Math.floor(rawTime.getTime() / 1000);
+            } else if ('year' in rawTime && 'month' in rawTime && 'day' in rawTime) {
+                // BusinessDay format from lightweight-charts
+                // Note: month is 1-indexed in BusinessDay, but Date expects 0-indexed
+                const businessDate = new Date(Date.UTC(rawTime.year, rawTime.month - 1, rawTime.day));
+                time = Math.floor(businessDate.getTime() / 1000);
+            } else {
+                // Unknown object type - log and mark as invalid
+                console.error(`[Sanitizer] ❌ Unknown time object type:`, rawTime, '(keys:', Object.keys(rawTime).join(', '), ')');
+                time = NaN; // Will be filtered out
+            }
         } else {
+            // Null, undefined, or other invalid type
             time = NaN; // Will be filtered out
         }
 

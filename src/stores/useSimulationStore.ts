@@ -18,9 +18,38 @@ import {
 } from '@/utils/candleResampler';
 import { devLog } from '@/utils/debug'; // Added
 import { getCached, loadWithBuffer, invalidateCache, type CachedData } from '@/utils/smartBuffer';
+import { normalizeToSeconds } from '@/utils/timeUtils'; // 🔥 NEW: Centralized timestamp utils
 
 // 🚀 FIX: Enable MapSet plugin for Immer to support Map in store
 enableMapSet();
+
+// ============================================================================
+// LRU Cache Configuration
+// ============================================================================
+
+/**
+ * Maximum number of tickers to keep in memory simultaneously
+ * Each ticker ~15MB (1m + 60m raw data), so 3 tickers = ~45MB total
+ * 
+ * Rationale: Prevents OOM crashes on low-end devices while allowing
+ * quick switching between recent stocks (BBRI → BBCA → BBRI)
+ */
+const MAX_CACHED_TICKERS = 3;
+
+/**
+ * LRU Access Log: Tracks last access time per ticker
+ * Used for eviction policy (Least Recently Used = first to be deleted)
+ */
+const TICKER_ACCESS_LOG = new Map<string, number>();
+
+/**
+ * Raw source data storage (per ticker)
+ * Only stores 1m and 60m master files, all other intervals computed on-demand
+ */
+interface RawSources {
+    '1m': ResamplerCandle[];   // Required: short-term precision data
+    '60m'?: ResamplerCandle[]; // Optional: long-term context (hybrid mode)
+}
 
 // ============================================================================
 // Types
@@ -33,6 +62,7 @@ export interface ChartCandle {
     high: number;
     low: number;
     close: number;
+    volume?: number; // 🔥 Standardized Volume field
 }
 
 export interface OrderbookLevel {
@@ -68,12 +98,21 @@ interface SimulationState {
     selectedDate: string | null; // YYYY-MM-DD format
     simulationCandles: WorkerCandle[]; // Candles for selected date (simulation queue)
 
-    // 🆕 Master Blueprint: Data Layer & Resampling
+    // 🆕 Master Blueprint: Data Layer & Resampling (MEMORY-OPTIMIZED)
     baseInterval: Interval;             // Currently displayed interval (e.g., '1m', '5m')
     sourceInterval: Interval;           // 🔥 FIX: Original data interval (immutable until reload)
-    baseData: ResamplerCandle[];        // Original data at base interval (King)
+    baseData: ResamplerCandle[];        // ⚠️ DEPRECATED: Use rawSources instead
     bufferData: ResamplerCandle[];      // Historical buffer for indicators
-    cachedIntervals: Map<Interval, ResamplerCandle[]>;  // Resampled intervals cache
+
+    // 🔥 NEW: LRU-managed raw data storage
+    rawSources: Map<string, RawSources>;  // Ticker → {1m, 60m} raw candles
+
+    // 🔥 NEW: Store Anchor Time for Interval Switching (Prevents Race Conditions)
+    tempAnchorTime: number | null;
+
+    // ❌ REMOVED: cachedIntervals (was causing 100MB memory bloat)
+    // Now using compute-on-demand instead of caching resampled intervals
+
     currentTicker: string;              // Current ticker symbol
 
     // Orderbook simulation (Level 2)
@@ -124,12 +163,13 @@ interface SimulationState {
     // 🔥 FIX: Tick batching state
     tickBatchQueue: TickData[];
     tickBatchScheduled: boolean;
+    clearTickQueue: () => void; // 🔥 FIX: Action to flush ghost ticks
 
-    // 🆕 Master Blueprint: New Actions
+    // 🆕 Master Blueprint: Memory-Aware Actions
     loadWithSmartBuffer: (ticker: string, startDate: Date, interval: Interval) => Promise<void>;
     switchInterval: (targetInterval: Interval) => ResamplerCandle[];
     getIntervalStates: () => IntervalState[];
-    clearIntervalCache: () => void;
+    evictOldestTicker: () => void; // 🔥 NEW: Manual LRU eviction
 
     // 🆕 FIX 3: Metrics actions
     updateMetrics: (metrics: Partial<SimulationState['metrics']>) => void;
@@ -156,12 +196,13 @@ const initialState = {
     selectedDate: null,
     simulationCandles: [],
 
-    // 🆕 Master Blueprint: Data Layer defaults
+    // 🆕 Master Blueprint: Memory-optimized defaults
     baseInterval: '1m' as Interval,
     sourceInterval: '1m' as Interval,  // 🔥 FIX: Track original data interval
-    baseData: [] as ResamplerCandle[],
+    baseData: [] as ResamplerCandle[], // ⚠️ DEPRECATED: Kept for backward compat
     bufferData: [] as ResamplerCandle[],
-    cachedIntervals: new Map<Interval, ResamplerCandle[]>(),
+    rawSources: new Map<string, RawSources>(), // 🔥 NEW: LRU cache
+    tempAnchorTime: null,
     currentTicker: '',
 
     orderbookBids: [],
@@ -273,7 +314,7 @@ function isLunchBreak(timestamp: number, timezone: string): boolean {
  * Handles: milliseconds, Date objects, ISO strings
  * Ensures consistent conversion across entire pipeline
  */
-export function normalizeTimestamp(rawTime: number | Date | string | undefined): number {
+export function normalizeTimestamp(rawTime: number | Date | string | undefined | any): number {
     if (rawTime === undefined || rawTime === null) {
         console.error('[Time] Invalid timestamp: undefined/null');
         return Math.floor(Date.now() / 1000);
@@ -298,6 +339,14 @@ export function normalizeTimestamp(rawTime: number | Date | string | undefined):
         return Math.floor(parsed);
     }
 
+    // 🔥 NEW: Handle BusinessDay objects {year, month, day}
+    if (typeof rawTime === 'object' && 'year' in rawTime && 'month' in rawTime && 'day' in rawTime) {
+        const businessDate = new Date(Date.UTC(rawTime.year, rawTime.month - 1, rawTime.day));
+        const timestamp = Math.floor(businessDate.getTime() / 1000);
+        console.log('[Time] 📊 Converted BusinessDay object:', rawTime, '→', timestamp);
+        return timestamp;
+    }
+
     console.error('[Time] Unknown timestamp type:', typeof rawTime, rawTime);
     return Math.floor(Date.now() / 1000);
 }
@@ -310,59 +359,81 @@ export function normalizeTimestamp(rawTime: number | Date | string | undefined):
  * Generate synthetic orderbook from current price
  * Simulates realistic bid/ask spread and depth
  */
-// Cached orderbook parameters (updated only when price changes significantly)
-let cachedOrderbookPrice = 0;
-let cachedSpread = 0;
-let cachedTickSize = 0;
-const PRICE_CHANGE_THRESHOLD = 0.001; // 0.1% price change triggers recalculation
+// Helper: Get IDX Tick Size
+function getIDXTickSize(price: number): number {
+    if (price < 200) return 1;
+    if (price < 500) return 2;
+    if (price < 2000) return 5;
+    if (price < 5000) return 10;
+    return 25;
+}
 
 function generateOrderbook(
     price: number,
     depth: number = 10
 ): { bids: OrderbookLevel[]; asks: OrderbookLevel[] } {
-    // 🚀 OPTIMIZATION: Only recalculate spread when price changes significantly
-    const priceChangePercent = Math.abs((price - cachedOrderbookPrice) / cachedOrderbookPrice);
-    if (cachedOrderbookPrice === 0 || priceChangePercent > PRICE_CHANGE_THRESHOLD) {
-        cachedOrderbookPrice = price;
-        // Spread: 0.01% - 0.05% (use middle value to avoid random)
-        cachedSpread = price * 0.00025; // Average spread
-        cachedTickSize = cachedSpread / 4;
-    }
+    // 🚀 FIXED: Strictly use IDX Tick Logic
+    // No more random spreads or floating point errors
+    const tickSize = getIDXTickSize(price);
+
+    // Spread is always at least 1 tick, but usually 1-2 ticks in liquid market
+    // We place Best Bid at Price OR Price - Tick (depending on trade side logic, but simple is centered)
+    // If Last Trade was at Price, then Best Bid = Price, Best Ask = Price + Tick?
+    // Or Best Bid = Price - Tick, Best Ask = Price + Tick? (Gapped)
+    // Detailed Simulation:
+    // If Price is 1000. Last trade matched 1000.
+    // If it was a BUY, 1000 was the ASK. So ASK is now 1000 (partially filled) or 1005 (cleared).
+    // If it was a SELL, 1000 was the BID. So BID is now 1000 or 995.
+
+    // Simplified Sync:
+    // Best Bid = Price - Tick (Logic: Last price is center of action)
+    // Best Ask = Price + Tick
+    // (If Price = 1000, Bid=995, Ask=1005). Spread = 10.
 
     const bids: OrderbookLevel[] = [];
     const asks: OrderbookLevel[] = [];
 
-    // 🚀 OPTIMIZATION: Pre-calculate base volume (avoid random in loop)
-    const baseVolume = 3000; // Middle value instead of random 1000-6000
-    const baseCount = 5; // Middle value instead of random 1-10
+    // 🚀 OPTIMIZATION: Pre-calculate base volume
+    const baseVolume = 3000;
+    const baseCount = 5;
 
-    // Generate bids (below current price)
+    // Generate bids (descending from Price - Tick)
+    // Start from 0 to depth-1
     for (let i = 0; i < depth; i++) {
-        const levelPrice = price - cachedSpread - (i * cachedTickSize);
-        // Simple volume decay with depth (no random)
-        const volumeDecay = 1 - (i * 0.05); // 5% decay per level
-        const volume = Math.floor(baseVolume * volumeDecay);
+        // Calculate price steps downwards
+        let currentLevelPrice = price;
+        // Step down i+1 times (accumulating tick sizes as price drops!)
+        // IDX tick size changes at thresholds (e.g. 2000 -> 1995 -> ... -> 495 -> 490? No 500 boundary)
+        // For simple robust simulation around current price, constant tick size is acceptable locally.
+        // But crossing 2000/5000 boundary requires dynamic tick size.
+        // We will assume local constant tick size for Depth=10 (unlikely to cross boundary significantly).
+
+        currentLevelPrice = price - (tickSize * (i + 1));
+
+        // Volume Decay
+        const volumeDecay = 1 - (i * 0.05);
+        const volume = Math.floor(baseVolume * volumeDecay * (0.8 + Math.random() * 0.4)); // Adding distinct noise
 
         bids.push({
-            price: Math.round(levelPrice * 100) / 100,
+            price: Math.floor(currentLevelPrice), // Ensure integer
             volume,
-            count: baseCount,
+            count: baseCount + Math.floor(Math.random() * 3),
         });
     }
 
-    // Generate asks (above current price) 
+    // Generate asks (ascending from Price + Tick)
     for (let i = 0; i < depth; i++) {
-        const levelPrice = price + cachedSpread + (i * cachedTickSize);
+        const currentLevelPrice = price + (tickSize * (i + 1));
+
         const volumeDecay = 1 - (i * 0.05);
-        const volume = Math.floor(baseVolume * volumeDecay);
+        const volume = Math.floor(baseVolume * volumeDecay * (0.8 + Math.random() * 0.4));
 
         asks.push({
-            price: Math.round(levelPrice * 100) / 100,
+            price: Math.floor(currentLevelPrice),
             volume,
-            count: baseCount,
+            count: baseCount + Math.floor(Math.random() * 3),
         });
     }
-
 
     return { bids, asks };
 }
@@ -386,7 +457,7 @@ function determineTradeSide(currentPrice: number, lastPrice: number): 'buy' | 's
 // ============================================================================
 
 export const useSimulationStore = create<SimulationState>()(
-    immer((set) => ({
+    immer((set, get) => ({
         ...initialState,
 
         // 🔥 FIX: Batch tick updates using requestAnimationFrame
@@ -494,6 +565,15 @@ export const useSimulationStore = create<SimulationState>()(
             });
         },
 
+        // 🔥 FIX: Flush tick queue to prevent "Ghost Ticks" after interval change
+        clearTickQueue: () => {
+            set((state) => {
+                state.tickBatchQueue = [];
+                state.tickBatchScheduled = false; // Cancel pending frame
+                console.log('[Store] 🧹 Tick queue flushed (preventing zombie ticks)');
+            });
+        },
+
         setCandleHistory(candles) {
             set((state) => {
                 // 🔥 GATEKEEPER: Validate that candles come from MERGED source
@@ -533,6 +613,7 @@ export const useSimulationStore = create<SimulationState>()(
                         high: c.h,
                         low: c.l,
                         close: c.c,
+                        volume: c.v || 0, // 🔥 PASS VOLUME (Worker normalizes to 'v')
                     });
                 });
 
@@ -592,7 +673,8 @@ export const useSimulationStore = create<SimulationState>()(
                 const intervalSeconds = intervalMinutes * 60;
 
                 // 2. Snap timestamp to current interval grid
-                const candleTime = normalizeTimestamp(candle.time);
+                // 🔥 FIX: Ensure we work in SECONDS (Worker sends MS)
+                const candleTime = normalizeToSeconds(candle.time);
                 const snappedTime = Math.floor(candleTime / intervalSeconds) * intervalSeconds;
 
                 // 3. Check if we need to start a new candle or update existing
@@ -605,13 +687,26 @@ export const useSimulationStore = create<SimulationState>()(
                     // 🚀 NEW FIX: Append previous completed candle to history
                     // This ensures indicators recalculate with new data!
                     if (current && current.time > 0) {
-                        // Previous candle is complete, add it to history
-                        state.candleHistory.push(current);
+                        // 🔥 ORDER VALIDATION: Ensure new candle is AFTER last history candle
+                        const lastHistoryTime = state.candleHistory.length > 0
+                            ? state.candleHistory[state.candleHistory.length - 1].time
+                            : 0;
+
+                        if (current.time > lastHistoryTime) {
+                            // Previous candle is complete and in correct order, add it to history
+                            state.candleHistory.push(current);
+                        } else {
+                            console.warn(
+                                `[Store] ⚠️ Rejected out-of-order candle append:`,
+                                `current.time=${current.time}, lastHistoryTime=${lastHistoryTime}`,
+                                `This can happen when switching intervals. Candle discarded.`
+                            );
+                        }
 
                         // 🔥 FIX #2: Sync baseData with live candles during replay
                         // If we are on the SOURCE interval (base mode), capture this candle into baseData.
                         // This allows resampling to work correctly during live replay.
-                        if (state.baseInterval === state.sourceInterval) {
+                        if (state.baseInterval === state.sourceInterval && current.time > lastHistoryTime) {
                             // Convert ChartCandle -> ResamplerCandle (simple cast as structure implies compatibility)
                             // Ideally we Normalize, but structure is compatible.
                             state.baseData.push({
@@ -636,12 +731,14 @@ export const useSimulationStore = create<SimulationState>()(
                     }
 
                     // New time bucket detected - start fresh candle
+                    // New time bucket detected - start fresh candle
                     current = {
                         time: snappedTime,
                         open: candle.open,
                         high: candle.high,
                         low: candle.low,
-                        close: candle.close
+                        close: candle.close,
+                        volume: (candle as any).v || (candle as any).volume || 0, // 🔥 PASS VOLUME (Worker sends 'v')
                     };
                 } else {
                     // Same time bucket - aggregate incoming data with existing
@@ -651,7 +748,8 @@ export const useSimulationStore = create<SimulationState>()(
                         open: current.open,  // Keep original open
                         high: Math.max(current.high, candle.high),  // Expand high if needed
                         low: Math.min(current.low, candle.low),    // Expand low if needed
-                        close: candle.close  // Always update to latest close
+                        close: candle.close,  // Always update to latest close
+                        volume: (candle as any).v || (candle as any).volume || current.volume || 0, // 🔥 PASS VOLUME (Worker sends 'v')
                     };
                 }
 
@@ -749,8 +847,7 @@ export const useSimulationStore = create<SimulationState>()(
                             });
 
                             state.baseData = sortedBaseData;
-                            state.cachedIntervals = new Map(); // Clear cache
-                            state.cachedIntervals.set('1m', sortedBaseData); // Seed 1m cache
+                            // 🔥 NEW: No more cachedIntervals - using compute-on-demand
 
                             state.currentCandle = null;
                             state.isPreparingData = false;
@@ -821,200 +918,190 @@ export const useSimulationStore = create<SimulationState>()(
             });
         },
 
-        // 🆕 Master Blueprint: Load data with smart buffering
+        // 🆕 Master Blueprint: Load data with smart buffering + LRU Memory Management
         async loadWithSmartBuffer(ticker, startDate, interval) {
             try {
-                console.log(`[Store] 📥 Loading ${ticker} ${interval} with smart buffer...`);
+                console.log(`[Store] 📥 Loading ${ticker} (LRU mode, max ${MAX_CACHED_TICKERS} tickers)...`);
 
-                const cached = await loadWithBuffer({
-                    ticker,
-                    startDate,
-                    baseInterval: interval,
-                    bufferSize: 200
-                });
+                // 🔥 LRU Eviction: Check if cache is full
+                const state = useSimulationStore.getState();
+                const currentTickers = Array.from(state.rawSources.keys());
+
+                if (!currentTickers.includes(ticker) && currentTickers.length >= MAX_CACHED_TICKERS) {
+                    // Find least recently used ticker
+                    let oldestTicker = currentTickers[0];
+                    let oldestTime = TICKER_ACCESS_LOG.get(oldestTicker) || 0;
+
+                    for (const t of currentTickers) {
+                        const accessTime = TICKER_ACCESS_LOG.get(t) || 0;
+                        if (accessTime < oldestTime) {
+                            oldestTicker = t;
+                            oldestTime = accessTime;
+                        }
+                    }
+
+                    console.log(`🧹 [Store] Evicting ${oldestTicker} to free RAM for ${ticker}`);
+                    set((state) => {
+                        state.rawSources.delete(oldestTicker);
+                    });
+                    TICKER_ACCESS_LOG.delete(oldestTicker);
+                }
+
+                // Update access time
+                TICKER_ACCESS_LOG.set(ticker, Date.now());
+
+                // Load raw sources (1m only for now, 60m loaded on-demand for hybrid mode)
+                const { loadHybridData } = await import('@/utils/hybridStitcher');
+                const stitched = await loadHybridData({ ticker, targetInterval: '1m' });
 
                 set((state) => {
+                    // Store ONLY raw 1m data (no interval derivatives)
+                    state.rawSources.set(ticker, {
+                        '1m': stitched.candles,
+                        // 60m will be lazy-loaded when user switches to >=1h intervals
+                    });
+
                     state.currentTicker = ticker;
-                    state.baseInterval = interval;
-                    state.sourceInterval = interval;  // 🔥 FIX: Set source interval on load
-                    state.baseData = [...cached.buffer, ...cached.active];
-                    state.bufferData = cached.buffer;
-                    state.cachedIntervals.clear(); // Reset cache when loading new data
-                    state.cachedIntervals.set(interval, state.baseData); // Cache base interval
+                    state.baseInterval = '1m';
+                    state.sourceInterval = '1m';
+
+                    // 🔥 Keep baseData for backward compatibility (some components may still use it)
+                    state.baseData = stitched.candles;
+                    state.bufferData = [];
+
+                    // Set chart data (convert ms → seconds)
+                    state.candleHistory = stitched.candles.map(c => ({
+                        time: normalizeToSeconds(c.time),
+                        open: c.open,
+                        high: c.high,
+                        low: c.low,
+                        close: c.close,
+                        volume: c.volume || 0 // 🔥 PASS VOLUME
+                    }));
+
+                    // 🔥 REPLAY MODE: Trim candleHistory for tick-by-tick simulation
+                    // Chart loads initial subset, worker fills rest dynamically
+                    const REPLAY_HISTORY_SIZE = 200;
+                    if (state.candleHistory.length > REPLAY_HISTORY_SIZE) {
+                        console.log(`[Store] 🎬 Replay Mode: Trimming candleHistory ${state.candleHistory.length} → ${REPLAY_HISTORY_SIZE}`);
+                        state.candleHistory = state.candleHistory.slice(0, REPLAY_HISTORY_SIZE);
+                    }
                 });
 
-                console.log(`[Store] ✅ Loaded ${cached.buffer.length} buffer + ${cached.active.length} active candles`);
-                console.log(`[Store] 📊 sourceInterval set to: ${interval}`);
+                const memoryUsageMB = (stitched.candles.length * 48 / 1024 / 1024).toFixed(1);
+                console.log(`[Store] ✅ Loaded ${ticker}: ${stitched.candles.length} candles (~${memoryUsageMB}MB)`);
+                console.log(`[Store] 📊 Cache status: ${state.rawSources.size}/${MAX_CACHED_TICKERS} tickers`);
             } catch (error) {
-                console.error('[Store] ❌ Failed to load with smart buffer:', error);
+                // 🔥 FIX: Proper error logging
+                const errorMsg = error instanceof Error ? error.message : String(error);
+                const errorStack = error instanceof Error ? error.stack : undefined;
+
+                console.error('[Store] ❌ Load failed:', errorMsg);
+                if (errorStack) {
+                    console.error('[Store] Stack:', errorStack);
+                }
+
                 throw error;
             }
         },
 
-        // 🆕 Master Blueprint: Switch interval with client-side resampling
+        // 🆕 Master Blueprint: Switch interval with COMPUTE-ON-DEMAND resampling (no cache)
         switchInterval(targetInterval): ResamplerCandle[] {
-            const state: SimulationState = useSimulationStore.getState();
+            const state = useSimulationStore.getState();
+            const ticker = state.currentTicker;
 
-            // Check if already cached
-            const cached: ResamplerCandle[] | undefined = state.cachedIntervals.get(targetInterval);
-            if (cached) {
-                devLog('RESAMPLING', `[Store] ✅ Using cached ${targetInterval} data (${cached.length} candles)`);
+            if (!ticker) {
+                throw new Error('[Store] No ticker loaded');
+            }
 
-                // 🔥 FIX #2: Filter partial candles from cache
-                const completeCandles = cached.filter((c: ResamplerCandle) => {
-                    const metadata = (c as any).metadata;
-                    return !metadata || !metadata.isPartial;
-                });
+            // 1. Capture Anchor Time (Precise Snapshot)
+            // Use the last candle from history to determine where we are.
+            // This runs SYNCHRONOUSLY before any data modification happens.
+            let anchorTime: number | null = null;
+            if (state.candleHistory.length > 0) {
+                anchorTime = state.candleHistory[state.candleHistory.length - 1].time; // Seconds
+                console.log(`[Store] ⚓ Captured Anchor Time: ${new Date(anchorTime * 1000).toLocaleString()} (${anchorTime})`);
+            }
 
-                if (completeCandles.length < cached.length) {
-                    devLog('RESAMPLING', `[Store] 📦 Filtered ${cached.length - completeCandles.length} partial candles from cache`);
-                }
+            // 🔥 COMPUTE ON-DEMAND: No cache lookup, always resample fresh from raw source
+            console.log(`[Store] 🔄 Resampling ${ticker}: 1m → ${targetInterval} (on-demand)`);
 
-                // 🔥 CRITICAL: Sort by time (ascending) - chart library REQUIRES this!
-                const sortedCandles = completeCandles.sort((a, b) => {
-                    const timeA = typeof a.time === 'number' ? a.time : new Date(a.time).getTime();
-                    const timeB = typeof b.time === 'number' ? b.time : new Date(b.time).getTime();
-                    return timeA - timeB; // Ascending
-                });
+            const rawSource = state.rawSources.get(ticker);
+            if (!rawSource || !rawSource['1m']) {
+                throw new Error(`[Store] No raw 1m data for ${ticker}`);
+            }
 
-                // 🚀 FIX 2: Sync state, chart, and worker
-                set((state) => {
-                    devLog('RESAMPLING', `[Store→switchInterval] 🔄 Using CACHED data for ${targetInterval}`);
-                    devLog('RESAMPLING', `[Store→switchInterval] 📊 Before: baseInterval=${state.baseInterval}, currentCandle=`, state.currentCandle);
+            // Performance measurement
+            const startTime = performance.now();
 
-                    const previousInterval = state.baseInterval;
-                    state.baseInterval = targetInterval;
-                    // sourceInterval stays unchanged - it's the original data interval
-                    // Update chart history with resampled candles
-                    // 🔥 FIX: Don't divide if time is already in seconds (< 10 billion)
-                    state.candleHistory = sortedCandles.map((c: ResamplerCandle) => {
-                        const timeInMs = typeof c.time === 'number' ? c.time : new Date(c.time).getTime();
-                        // Force to seconds (Unix timestamp)
-                        const timeInSeconds = timeInMs > 10_000_000_000 ? Math.floor(timeInMs / 1000) : Math.floor(timeInMs);
+            // Resample from 1m source (always fresh, no stale cache)
+            const resampled = resampleCandles(
+                rawSource['1m'],
+                '1m',
+                targetInterval
+            );
 
-                        return {
-                            time: timeInSeconds,
-                            open: c.open,
-                            high: c.high,
-                            low: c.low,
-                            close: c.close
-                        };
+            const duration = performance.now() - startTime;
+            console.log(`[Store] ✅ Resampled in ${duration.toFixed(2)}ms (${resampled.length} candles)`);
+
+            // ⚠️ Performance guard: Warn if resampling takes >50ms
+            if (duration > 50) {
+                console.warn(`[Store] ⚠️ Slow resample: ${duration.toFixed(2)}ms > 50ms target`);
+            }
+
+            // Update store state
+            set((state) => {
+                state.baseInterval = targetInterval;
+                state.tempAnchorTime = anchorTime; // ✅ Save for UI consumption
+
+                // 🔥 LOGIC: Dynamic History Trimming (Prevent Overlap)
+                let cutOffIndex = resampled.length;
+
+                if (anchorTime) {
+                    // Find the candle in new data that matches our Anchor Time
+                    // anchorTime is in Seconds. resampled[].time is in MS.
+                    const targetMs = anchorTime * 1000;
+                    const idx = resampled.findIndex(c => {
+                        const t = typeof c.time === 'string' ? new Date(c.time).getTime() : c.time;
+                        return t >= targetMs;
                     });
 
-                    // 🔥 FIX #3: Realign currentCandle to new interval bucket
-                    if (state.currentCandle) {
-                        const intervalMinutes = intervalToMinutes(targetInterval);
-                        const intervalSeconds = intervalMinutes * 60;
-                        const newSnappedTime = Math.floor(state.currentCandle.time / intervalSeconds) * intervalSeconds;
-
-                        // Update time to match new interval grid
-                        state.currentCandle.time = newSnappedTime;
+                    if (idx !== -1) {
+                        // We want History to INCLUDE this candle (so chart shows it)
+                        // Worker will start from the NEXT candle.
+                        cutOffIndex = idx + 1;
+                        console.log(`[Store] ✂️ Trimmed History at Index ${cutOffIndex} (${new Date(resampled[idx].time).toLocaleString()})`);
                     }
+                } else {
+                    // Fallback: Default to recent 200 candles if no anchor
+                    const DEFAULT_HISTORY = 200;
+                    if (resampled.length > DEFAULT_HISTORY) {
+                        cutOffIndex = DEFAULT_HISTORY;
+                    }
+                }
 
-                    devLog('RESAMPLING', `[Store→switchInterval] 🔔 Re-aligned currentCandle to ${targetInterval} grid`);
-                }); // End set()
+                // Safety: Ensure we don't exceed data length
+                cutOffIndex = Math.min(cutOffIndex, resampled.length);
 
-                devLog('RESAMPLING', `[Store] 📊 Chart updated with ${completeCandles.length} ${targetInterval} candles`);
-                return completeCandles.map((c: any) => ({
-                    time: typeof c.time === 'number' && c.time > 10000000000 ? c.time / 1000 : c.time,
+                // Slice History
+                const historySlice = resampled.slice(0, cutOffIndex);
+
+                // Convert to chart format (ms → seconds)
+                state.candleHistory = historySlice.map(c => ({
+                    time: normalizeToSeconds(c.time),
                     open: c.open,
                     high: c.high,
                     low: c.low,
                     close: c.close,
-                    volume: c.volume || 0
-                })); // Return formatted candles (though component usually uses store directly)
-            }
+                    volume: c.volume || 0 // 🔥 PASS VOLUME (Resampled)
+                }));
 
-            // 🔥 FIX: Resample from SOURCE interval, not current baseInterval
-            // This prevents "incompatible interval" errors when switching 1m→5m→1m
-            try {
-                devLog('RESAMPLING', `[Store] 🔄 Resampling: ${state.sourceInterval} (source) → ${targetInterval}`);
+                // 🔥 FULL DATA for Worker (Page will slice it using history length)
+                // workerQueue = baseData.slice(candleHistory.length)
+                state.baseData = resampled;
+            });
 
-                const resampled = resampleCandles(
-                    state.baseData,
-                    state.sourceInterval,  // 🔥 FIX: Use SOURCE, not baseInterval
-                    targetInterval
-                );
-
-                // 🔥 CRITICAL: Sort resampled data before caching!
-                const sortedResampled = resampled.sort((a, b) => {
-                    const timeA = typeof a.time === 'number' ? a.time : new Date(a.time).getTime();
-                    const timeB = typeof b.time === 'number' ? b.time : new Date(b.time).getTime();
-                    return timeA - timeB;
-                });
-
-                // Cache result and sync state
-                set((state) => {
-                    state.cachedIntervals.set(targetInterval, sortedResampled);
-                    state.baseInterval = targetInterval;  // Update displayed interval
-                    // sourceInterval UNCHANGED - still points to original data
-
-                    // 🔥 FIX: Splitting History vs Active Candle
-                    // resampleCandles returns: [Full, Full, Full, Partial?]
-                    // We want History = [Full, Full, Full]
-                    // And Current = Partial (if exists)
-
-                    const completeCandles = sortedResampled.filter(c => !c.metadata?.isPartial);
-                    const partialCandles = sortedResampled.filter(c => c.metadata?.isPartial);
-
-                    if (partialCandles.length > 0) {
-                        devLog('RESAMPLING', `[Store] 🧊 Restoring active candle from partial switch data`);
-                        // Set the partial bucket as the CURRENT active candle
-                        // This ensures visual continuity (open/high/low preserved)
-                        const partial = partialCandles[0];
-                        // 🔥 FIX: Normalize timestamp to seconds to match Chart & Update Logic
-                        const partialTime = typeof partial.time === 'number' ? partial.time : new Date(partial.time).getTime();
-                        const timeInSeconds = partialTime > 10_000_000_000 ? partialTime / 1000 : partialTime;
-
-                        state.currentCandle = {
-                            time: Math.floor(timeInSeconds),
-                            open: partial.open,
-                            high: partial.high,
-                            low: partial.low,
-                            close: partial.close
-                        };
-                    } else {
-                        // 🔥 FIX: Don't destroy currentCandle on perfect boundary
-                        // Keep existing if available, or seed from last complete candle
-                        if (!state.currentCandle && completeCandles.length > 0) {
-                            const lastComplete = completeCandles[completeCandles.length - 1];
-                            const lastTime = typeof lastComplete.time === 'number' ? lastComplete.time : new Date(lastComplete.time).getTime() / 1000;
-
-                            devLog('RESAMPLING', `[Store] 🌱 Seeding currentCandle from last complete bar`);
-                            state.currentCandle = {
-                                time: lastTime + (intervalToMinutes(targetInterval) * 60), // Next bar time
-                                open: lastComplete.close, // Next bar opens at last close
-                                high: lastComplete.close,
-                                low: lastComplete.close,
-                                close: lastComplete.close
-                            };
-                        }
-                        // Otherwise keep existing currentCandle (don't reset to null!)
-                    }
-
-                    // Update chart history with resampled candles (without partials)
-                    // 🔥 FIX: Don't divide if time is already in seconds
-                    state.candleHistory = completeCandles.map((c: ResamplerCandle) => {
-                        const timeInMs = typeof c.time === 'number' ? c.time : new Date(c.time).getTime();
-                        const timeInSeconds = timeInMs > 10_000_000_000 ? timeInMs / 1000 : timeInMs;
-
-                        return {
-                            time: timeInSeconds,
-                            open: c.open,
-                            high: c.high,
-                            low: c.low,
-                            close: c.close
-                        };
-                    });
-                });
-
-                devLog('RESAMPLING', `[Store] ✅ Resampled ${state.sourceInterval} → ${targetInterval} (${resampled.length} candles)`);
-                devLog('RESAMPLING', `[Store] 📊 Chart updated with resampled data`);
-                return resampled;
-            } catch (error) {
-                console.error(`[Store] ❌ Failed to resample to ${targetInterval}:`, error);
-                throw error;
-            }
+            return resampled;
         },
 
         // 🆕 Master Blueprint: Get interval button states
@@ -1034,12 +1121,32 @@ export const useSimulationStore = create<SimulationState>()(
             return getAvailableIntervals(evalInterval, evalData);
         },
 
-        // 🆕 Master Blueprint: Clear interval cache
-        clearIntervalCache() {
+        evictOldestTicker() {
+            const state = useSimulationStore.getState();
+            const currentTickers = Array.from(state.rawSources.keys());
+
+            if (currentTickers.length === 0) {
+                console.log('[Store] 🛡️ No tickers to evict');
+                return;
+            }
+
+            // Find least recently used ticker
+            let oldestTicker = currentTickers[0];
+            let oldestTime = TICKER_ACCESS_LOG.get(oldestTicker) || 0;
+
+            for (const t of currentTickers) {
+                const accessTime = TICKER_ACCESS_LOG.get(t) || 0;
+                if (accessTime < oldestTime) {
+                    oldestTicker = t;
+                    oldestTime = accessTime;
+                }
+            }
+
+            console.log(`🧹 [Store] Manually evicting ${oldestTicker}`);
             set((state) => {
-                state.cachedIntervals.clear();
-                console.log('[Store] 🗑️ Interval cache cleared');
+                state.rawSources.delete(oldestTicker);
             });
+            TICKER_ACCESS_LOG.delete(oldestTicker);
         },
 
         // 🆕 FIX 3: Update performance metrics
