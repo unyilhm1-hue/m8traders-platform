@@ -338,8 +338,8 @@ function MultiPaneTradingChartInner() {
             }
 
             // ✅ MONOTONIC TIME GUARD: Reject backwards time updates
-            // LWC requires strictly ascending time for update()
-            if (lastUpdateTimeRef.current > 0 && update.time <= lastUpdateTimeRef.current) {
+            // LWC requires strictly ascending OR equal time for update() (equal = updating same candle)
+            if (lastUpdateTimeRef.current > 0 && update.time < lastUpdateTimeRef.current) {
                 console.warn('[MultiPane] ⏮️ REJECTED backwards time update', {
                     newTime: update.time,
                     lastTime: lastUpdateTimeRef.current,
