@@ -683,7 +683,29 @@ export const useSimulationStore = create<SimulationState>()(
                     return;
                 }
 
-                const sourceTime = normalizeTimestamp(candle.time);
+                // ✅ CRITICAL: Force time to primitive number IMMEDIATELY
+                // This prevents object time from propagating through the system
+                let rawTime = candle.time;
+
+                // Ensure rawTime is primitive number
+                if (typeof rawTime !== 'number') {
+                    if (typeof rawTime === 'object') {
+                        console.error('[Store] ❌ REJECTED: candle.time is object, not primitive number', {
+                            time: rawTime,
+                            type: typeof rawTime,
+                            keys: rawTime ? Object.keys(rawTime) : 'null'
+                        });
+                        return; // REJECT entirely
+                    }
+                    // Try to convert to number
+                    rawTime = Number(rawTime);
+                    if (!Number.isFinite(rawTime)) {
+                        console.error('[Store] ❌ REJECTED: cannot convert time to finite number', candle.time);
+                        return;
+                    }
+                }
+
+                const sourceTime = normalizeTimestamp(rawTime);
                 // Track the "last seen" source candle in a transient way (using the last element of baseData?)
                 const lastBase = state.baseData[state.baseData.length - 1];
                 const lastBaseTime = (lastBase && lastBase.time != null) ? normalizeTimestamp(lastBase.time) : 0;
@@ -713,7 +735,7 @@ export const useSimulationStore = create<SimulationState>()(
 
                 // 2. Snap timestamp to current interval grid
                 // 🔥 FIX: Ensure we work in SECONDS (Worker sends MS)
-                const candleTime = normalizeToSeconds(candle.time);
+                const candleTime = normalizeToSeconds(rawTime);
                 const snappedTime = Math.floor(candleTime / intervalSeconds) * intervalSeconds;
 
                 // 3. Check if we need to start a new candle or update existing

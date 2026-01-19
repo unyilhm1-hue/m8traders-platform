@@ -32,6 +32,7 @@ function MultiPaneTradingChartInner() {
 
     const isChartReady = useRef(false);
     const pendingUpdateRef = useRef<any>(null);
+    const lastUpdateTimeRef = useRef<number>(0); // ✅ Track last successful update time for monotonic guard
 
     const [isAtLiveEdge, setIsAtLiveEdge] = useState(true);
     const isAtLiveEdgeRef = useRef(true);
@@ -326,23 +327,56 @@ function MultiPaneTradingChartInner() {
             if (!isChartReady.current || !pendingUpdateRef.current || !priceSeriesRef.current) return;
             const update = pendingUpdateRef.current;
 
-            priceSeriesRef.current.update(update);
-
-            if (volumeSeriesRef.current) {
-                volumeSeriesRef.current.update({
+            // ✅ CRITICAL: Validate time is primitive number
+            if (typeof update.time !== 'number' || !Number.isFinite(update.time)) {
+                console.error('[MultiPane] ❌ REJECTED: update.time is not primitive number', {
                     time: update.time,
-                    value: update.value,
-                    color: update.close >= update.open ? '#089981' : '#F23645'
+                    type: typeof update.time
                 });
+                pendingUpdateRef.current = null;
+                return;
             }
 
-            // Auto-scroll logic (TradingView-like)
-            if (isAtLiveEdgeRef.current && priceChartRef.current) {
-                priceChartRef.current.timeScale().scrollToRealTime();
+            // ✅ MONOTONIC TIME GUARD: Reject backwards time updates
+            // LWC requires strictly ascending time for update()
+            if (lastUpdateTimeRef.current > 0 && update.time <= lastUpdateTimeRef.current) {
+                console.warn('[MultiPane] ⏮️ REJECTED backwards time update', {
+                    newTime: update.time,
+                    lastTime: lastUpdateTimeRef.current,
+                    delta: update.time - lastUpdateTimeRef.current
+                });
+                pendingUpdateRef.current = null;
+                return;
             }
 
-            pendingUpdateRef.current = null;
-            simTelemetry.recordCandleUpdate();
+            try {
+                priceSeriesRef.current.update(update);
+
+                if (volumeSeriesRef.current) {
+                    volumeSeriesRef.current.update({
+                        time: update.time,
+                        value: update.value,
+                        color: update.close >= update.open ? '#089981' : '#F23645'
+                    });
+                }
+
+                // Auto-scroll logic (TradingView-like)
+                if (isAtLiveEdgeRef.current && priceChartRef.current) {
+                    priceChartRef.current.timeScale().scrollToRealTime();
+                }
+
+                // ✅ Update last successful time ONLY after successful update
+                lastUpdateTimeRef.current = update.time;
+
+                pendingUpdateRef.current = null;
+                simTelemetry.recordCandleUpdate();
+            } catch (err) {
+                console.error('[MultiPane] ❌ Chart update failed:', err, {
+                    update,
+                    lastTime: lastUpdateTimeRef.current
+                });
+                pendingUpdateRef.current = null;
+            }
         };
 
         const unsubscribe = useSimulationStore.subscribe((state) => {
