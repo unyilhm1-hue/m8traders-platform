@@ -248,7 +248,7 @@ class SimulationEngine {
         // A 1m candle always represents 1 minute of trading logic.
 
         const intervalMap: Record<string, number> = {
-            '1m': 60000, '5m': 300000, '15m': 900000, '30m': 1800000,
+            '1m': 60000, '2m': 120000, '5m': 300000, '15m': 900000, '30m': 1800000,
             '1h': 3600000, '60m': 3600000, '4h': 14400000, '1d': 86400000
         };
 
@@ -387,9 +387,10 @@ class SimulationEngine {
 
         postMessage({
             type: 'TICK',
+            epoch: this.currentEpoch, // 🔥 Pass Epoch at top-level
             data: {
                 price: tick.price,
-                epoch: this.currentEpoch, // 🔥 Pass Epoch
+                epoch: this.currentEpoch, // 🔥 Also in payload for backwards compat
                 volume: tick.volume,
                 timestamp: Math.floor(timestamp),
                 candleIndex: this.currentCandleIndex,
@@ -480,7 +481,7 @@ class SimulationEngine {
 
         // 2. Map to TickSchedule
         const intervalMap: Record<string, number> = {
-            '1m': 60000, '5m': 300000, '15m': 900000, '30m': 1800000,
+            '1m': 60000, '2m': 120000, '5m': 300000, '15m': 900000, '30m': 1800000,
             '1h': 3600000, '60m': 3600000, '4h': 14400000, '1d': 86400000
         };
         const durationMs = intervalMap[this.currentIntervalStr] || 60000;

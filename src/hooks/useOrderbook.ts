@@ -31,7 +31,7 @@ export function useOrderbook(
             try {
                 const ob = generateOrderbook(currentCandle, {
                     atr,
-                    numLevels: config?.numLevels ?? 10,
+                    numLevels: config?.numLevels ?? 8,
                     baseSpreadTicks: config?.baseSpreadTicks ?? 2.5,
                 });
 

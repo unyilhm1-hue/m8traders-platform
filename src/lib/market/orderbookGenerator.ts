@@ -29,7 +29,7 @@ export function generateOrderbook(
     candle: Candle,
     config: OrderbookConfig
 ): OrderbookSnapshot {
-    const { atr, numLevels = 10, baseSpreadTicks = 2.5 } = config;
+    const { atr, numLevels = 8, baseSpreadTicks = 2.5 } = config;
 
     // 1. Calculate price anchors
     // Gunakan mid-price dari candle (high + low) / 2

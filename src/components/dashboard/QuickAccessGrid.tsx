@@ -54,7 +54,7 @@ export function QuickAccessGrid() {
                 <Link
                     key={feature.title}
                     href={feature.href}
-                    className="group relative p-6 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--bg-tertiary)] hover:border-[var(--bg-subtle-border)] overflow-hidden transition-all duration-300 hover:transform hover:-translate-y-1 hover:shadow-2xl"
+                    className="group relative p-4 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--bg-tertiary)] hover:border-[var(--bg-subtle-border)] overflow-hidden transition-all duration-300 hover:transform hover:-translate-y-1 hover:shadow-2xl"
                 >
                     {/* Hover Gradient Background */}
                     <div className={`absolute inset-0 bg-gradient-to-br ${feature.gradient} opacity-0 group-hover:opacity-5 transition-opacity duration-500`} />

@@ -39,7 +39,7 @@ export function MarketDataPanel() {
     }
 
     return (
-        <aside className="w-[300px] glassmorphism border-l border-[var(--bg-subtle-border)] flex flex-col bg-[var(--bg-secondary)]/90 backdrop-blur-md box-border">
+        <aside className="w-[300px] h-full glassmorphism border-l border-[var(--bg-subtle-border)] flex flex-col bg-[var(--bg-secondary)]/90 backdrop-blur-md box-border">
             {/* Header with Collapse */}
             <div className="h-[50px] px-4 border-b border-[var(--bg-subtle-border)] flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-4">
@@ -80,7 +80,7 @@ export function MarketDataPanel() {
             </div>
 
             {/* Tab Content - No props needed, components use store */}
-            <div className="flex-1 overflow-hidden relative">
+            <div className="flex-1 overflow-hidden relative min-h-0">
                 {activeTab === 'level2' && <Level2OrderBook />}
                 {activeTab === 'tape' && <TimeAndSales />}
                 {activeTab === 'metrics' && <AdvancedMetricsDisplay currentPrice={displayPrice} />}

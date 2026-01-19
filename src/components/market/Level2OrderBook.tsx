@@ -55,42 +55,48 @@ export function Level2OrderBook({ currentPrice: priceOverride }: Level2OrderBook
                 </div>
             </div>
 
-            {/* Order Book */}
-            <div className="flex-1 overflow-y-auto">
-                {/* Asks (sell orders - reversed, highest first) */}
-                <div className="border-b border-[var(--bg-tertiary)] pb-2">
-                    <div className="grid grid-cols-3 gap-2 px-3 py-1.5 text-xs font-semibold text-[var(--text-tertiary)] border-b border-[var(--bg-tertiary)]">
-                        <div className="text-right">Price</div>
-                        <div className="text-right">Size</div>
-                        <div className="text-right">Orders</div>
+            {/* Order Book Content Wrapper */}
+            <div className="flex-1 min-h-0 flex flex-col">
+
+                {/* Asks (Top Half) */}
+                <div className="flex-1 min-h-0 overflow-y-auto flex flex-col justify-end border-b border-[var(--bg-tertiary)]">
+                    <div className="border-b border-[var(--bg-tertiary)] pb-1 sticky top-0 bg-[var(--bg-secondary)] z-10">
+                        <div className="grid grid-cols-3 gap-2 px-3 py-1.5 text-xs font-semibold text-[var(--text-tertiary)]">
+                            <div className="text-right">Price</div>
+                            <div className="text-right">Size</div>
+                            <div className="text-right">Orders</div>
+                        </div>
                     </div>
-                    {asks.slice().reverse().map((ask, idx) => {
-                        const percent = (ask.volume / maxVolume) * 100;
-                        return (
-                            <div
-                                key={`ask-${idx}`}
-                                className="relative grid grid-cols-3 gap-2 px-3 py-1 text-xs font-mono"
-                            >
+
+                    <div>
+                        {asks.slice(0, 8).reverse().map((ask, idx) => {
+                            const percent = (ask.volume / maxVolume) * 100;
+                            return (
                                 <div
-                                    className="absolute right-0 top-0 bottom-0 bg-red-500/10"
-                                    style={{ width: `${percent}%` }}
-                                />
-                                <div className="relative text-right text-red-400">
-                                    {ask.price.toLocaleString('id-ID')}
+                                    key={`ask-${idx}`}
+                                    className="relative grid grid-cols-3 gap-2 px-3 py-1 text-xs font-mono"
+                                >
+                                    <div
+                                        className="absolute right-0 top-0 bottom-0 bg-red-500/10"
+                                        style={{ width: `${percent}%` }}
+                                    />
+                                    <div className="relative text-right text-red-400">
+                                        {ask.price.toLocaleString('id-ID')}
+                                    </div>
+                                    <div className="relative text-right text-[var(--text-primary)]">
+                                        {ask.volume.toLocaleString()}
+                                    </div>
+                                    <div className="relative text-right text-[var(--text-secondary)]">
+                                        {ask.count}
+                                    </div>
                                 </div>
-                                <div className="relative text-right text-[var(--text-primary)]">
-                                    {ask.volume.toLocaleString()}
-                                </div>
-                                <div className="relative text-right text-[var(--text-secondary)]">
-                                    {ask.count}
-                                </div>
-                            </div>
-                        );
-                    })}
+                            );
+                        })}
+                    </div>
                 </div>
 
-                {/* Spread Indicator */}
-                <div className="py-2 px-3 bg-[var(--bg-tertiary)] flex items-center justify-between">
+                {/* Spread Indicator (Middle - Fixed) */}
+                <div className="py-2 px-3 bg-[var(--bg-tertiary)] flex items-center justify-between shrink-0 z-20 shadow-sm">
                     <span className="text-xs font-semibold text-[var(--text-primary)]">
                         Spread: Rp {spread.toFixed(0)}
                     </span>
@@ -99,9 +105,9 @@ export function Level2OrderBook({ currentPrice: priceOverride }: Level2OrderBook
                     </span>
                 </div>
 
-                {/* Bids (buy orders - descending) */}
-                <div className="pt-2">
-                    {bids.map((bid, idx) => {
+                {/* Bids (Bottom Half) */}
+                <div className="flex-1 min-h-0 overflow-y-auto pt-1">
+                    {bids.slice(0, 8).map((bid, idx) => {
                         const percent = (bid.volume / maxVolume) * 100;
                         return (
                             <div

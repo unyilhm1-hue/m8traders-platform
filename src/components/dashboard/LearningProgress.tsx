@@ -30,12 +30,12 @@ export function LearningProgress() {
     const progress = xpNeeded > 0 ? (xpInLevel / xpNeeded) * 100 : 100;
 
     return (
-        <div className="h-full flex flex-col justify-between p-8 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--bg-tertiary)] relative overflow-hidden">
+        <div className="h-full flex flex-col justify-between p-5 rounded-2xl bg-[var(--bg-secondary)] border border-[var(--bg-tertiary)] relative overflow-hidden">
             {/* Background Decoration */}
             <div className="absolute top-0 right-0 w-32 h-32 bg-[var(--accent-primary)] opacity-5 rounded-full blur-[40px] translate-x-1/2 -translate-y-1/2" />
 
             {/* Header */}
-            <div className="relative z-10 flex justify-between items-start mb-8">
+            <div className="relative z-10 flex justify-between items-start mb-4">
                 <div className="flex items-center gap-4">
                     <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[var(--bg-tertiary)] to-[var(--bg-secondary)] border border-[var(--bg-tertiary)] flex items-center justify-center text-3xl shadow-lg">
                         {currentLevel?.icon}
@@ -63,7 +63,7 @@ export function LearningProgress() {
             </div>
 
             {/* Main Progress Bar */}
-            <div className="relative z-10 mb-8">
+            <div className="relative z-10 mb-4">
                 <div className="flex justify-between text-sm mb-2">
                     <span className="font-medium text-[var(--text-primary)]">Progress to Level {userStats.current_level + 1}</span>
                     <span className="font-mono text-[var(--text-tertiary)]">{Math.round(progress)}%</span>

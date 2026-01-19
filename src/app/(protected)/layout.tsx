@@ -30,7 +30,7 @@ export default async function ProtectedLayout({
     const mockUser = user || { email: 'dev@localhost', id: 'dev-user' } as any;
 
     return (
-        <div className="min-h-screen flex flex-col">
+        <div className="h-screen overflow-hidden flex flex-col">
             {/* Header */}
             <header className="h-[var(--header-height)] flex items-center justify-between px-6 border-b border-[var(--bg-tertiary)] bg-[var(--bg-primary)]">
                 <div className="flex items-center gap-6">
@@ -68,7 +68,7 @@ export default async function ProtectedLayout({
             </header>
 
             {/* Main Content */}
-            <main className="flex-1">{children}</main>
+            <main className="flex-1 min-h-0 overflow-y-auto relative flex flex-col">{children}</main>
 
             {/* Debug Tools */}
             <PerformanceDashboard />

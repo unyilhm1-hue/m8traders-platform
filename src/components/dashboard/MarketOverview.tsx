@@ -23,16 +23,16 @@ const MARKET_DATA: MarketItem[] = [
 
 export function MarketOverview() {
     return (
-        <div className="glassmorphism rounded-lg p-5 border border-[var(--bg-tertiary)] bg-gradient-to-b from-[var(--bg-secondary)]/80 to-[var(--bg-primary)]/80">
-            <h2 className="text-lg font-bold text-[var(--text-primary)] mb-4 flex items-center gap-2">
+        <div className="glassmorphism rounded-lg p-4 border border-[var(--bg-tertiary)] bg-gradient-to-b from-[var(--bg-secondary)]/80 to-[var(--bg-primary)]/80 h-full">
+            <h2 className="text-base font-bold text-[var(--text-primary)] mb-3 flex items-center gap-2">
                 <span className="text-[var(--accent-primary)]">📊</span> Market Pulse
             </h2>
 
-            <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+            <div className="grid grid-cols-2 gap-2">
                 {MARKET_DATA.map((item) => (
                     <div
                         key={item.symbol}
-                        className="p-3 rounded-lg bg-[var(--bg-primary)]/50 border border-[var(--bg-tertiary)] hover:border-[var(--accent-primary)]/30 transition-colors group"
+                        className="p-2 rounded-md bg-[var(--bg-primary)]/50 border border-[var(--bg-tertiary)] hover:border-[var(--accent-primary)]/30 transition-colors group"
                     >
                         <div className="flex justify-between items-start mb-1">
                             <span className="text-xs font-bold text-[var(--text-secondary)]">

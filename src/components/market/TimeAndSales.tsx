@@ -61,7 +61,7 @@ export function TimeAndSales({ currentPrice: priceOverride }: TimeAndSalesProps)
             </div>
 
             {/* Entries (scrollable) */}
-            <div ref={containerRef} className="flex-1 overflow-y-auto" style={{ scrollSnapType: 'y proximity' }}>
+            <div ref={containerRef} className="flex-1 overflow-y-auto min-h-0" style={{ scrollSnapType: 'y proximity' }}>
                 {visibleTrades.map((trade, idx) => {
                     const sideColor =
                         trade.side === 'buy'

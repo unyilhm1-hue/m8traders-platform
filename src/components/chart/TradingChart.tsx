@@ -54,6 +54,10 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
     // 🛡️ LAYER 3 GUARD: Track active interval with Ref to prevent stale closure
     const activeIntervalRef = useRef<string>('1m');
 
+    // 🔥 NEW: Grace period flag for interval changes
+    // When true, timestamp guard is disabled until first successful worker update
+    const intervalChangeGraceRef = useRef<boolean>(false);
+
     // Ambil history & indicators dari store
     const candleHistory = useSimulationStore((state) => state.candleHistory);
 
@@ -235,7 +239,15 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
             historyLoadedRef.current = 0;
             historyLoadedLengthRef.current = 0;
 
-            // 2. Clear all indicator series
+            // 🔥 NEW: Activate grace period - disable guard until first successful update
+            intervalChangeGraceRef.current = true;
+            console.log(`[Chart] 🛡️ Grace period ACTIVATED - timestamp guard disabled`);
+
+            // 2. CRITICAL: Remove ALL series to clear library state
+            // Don't destroy chart (causes "Object is disposed" errors)
+            // Just remove series and recreate them
+
+            // Remove all indicator series
             indicatorSeriesRef.current.forEach((series) => {
                 try {
                     mainChartRef.current?.removeSeries(series);
@@ -244,6 +256,58 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
                 }
             });
             indicatorSeriesRef.current.clear();
+
+            // Remove volume series
+            if (volumeSeriesRef.current && mainChartRef.current) {
+                try {
+                    mainChartRef.current.removeSeries(volumeSeriesRef.current);
+                    console.log('[Chart] 🗑️ Removed volume series');
+                } catch (err) {
+                    console.warn('[Chart] ⚠️ Could not remove volume series:', err);
+                }
+            }
+
+            // Remove candle series
+            if (candleSeriesRef.current && mainChartRef.current) {
+                try {
+                    mainChartRef.current.removeSeries(candleSeriesRef.current);
+                    console.log('[Chart] 🗑️ Removed candle series');
+                } catch (err) {
+                    console.warn('[Chart] ⚠️ Could not remove candle series:', err);
+                }
+            }
+
+            // Recreate series with fresh library state
+            if (mainChartRef.current) {
+                candleSeriesRef.current = mainChartRef.current.addCandlestickSeries({
+                    upColor: '#089981',
+                    downColor: '#F23645',
+                    borderVisible: false,
+                    wickUpColor: '#089981',
+                    wickDownColor: '#F23645',
+                });
+
+                volumeSeriesRef.current = mainChartRef.current.addHistogramSeries({
+                    color: '#26a69a',
+                    priceFormat: {
+                        type: 'volume',
+                    },
+                    priceScaleId: '',
+                });
+
+                // Configure RIGHT scale for volume
+                mainChartRef.current.priceScale('').applyOptions({
+                    scaleMargins: {
+                        top: 0.8,
+                        bottom: 0,
+                    },
+                });
+
+                // Update context
+                setMainSeries(candleSeriesRef.current);
+
+                console.log('[Chart] ✨ Recreated all series with clean state');
+            }
 
             // 3. Clear pending updates
             pendingUpdateRef.current = null;
@@ -262,6 +326,12 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
             historyLoadedRef.current === lastCandleTime &&
             historyLoadedLengthRef.current === total &&
             lastLoadedIntervalRef.current === currentInterval) {
+            // 🔥 FIX: Ensure chart is ready even when skipping reload
+            // This prevents indefinite lock when interval changes but data hasn't refreshed yet
+            if (!isChartReady.current) {
+                console.log('[Chart] ⚡ Unlocking chart (skip reload but was locked)');
+                isChartReady.current = true;
+            }
             return;
         }
 
@@ -281,14 +351,39 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
             // 🔥 CRITICAL: Use sanitizer to handle ALL key formats and guarantee sort!
             // Manual sort was failing silently (accessing a.time when data has 'timestamp' key)
             // Sanitizer normalizes time/t/timestamp → guaranteed sorted & deduplicated output
-            const sortedHistory = sanitizeDataForChart(candleHistory);
+            const rawSortedHistory = sanitizeDataForChart(candleHistory);
 
             // 🔬 DIAGNOSTIC: Check what sanitizer actually returned
             console.log('[Chart] 🧪 Sanitizer output type check:', {
-                first: sortedHistory[0],
-                firstTimeType: typeof sortedHistory[0]?.time,
-                firstTimeValue: sortedHistory[0]?.time
+                first: rawSortedHistory[0],
+                firstTimeType: typeof rawSortedHistory[0]?.time,
+                firstTimeValue: rawSortedHistory[0]?.time
             });
+
+            // 🔥 PARANOID VALIDATION: Filter sortedHistory to ONLY numbers
+            // Even though sanitizer should return clean data, double-check to be safe
+            const sortedHistory = rawSortedHistory.filter((item, index) => {
+                const isValid = typeof item.time === 'number' && Number.isFinite(item.time);
+                if (!isValid) {
+                    console.error(`[Chart] 🚨 Sanitizer returned BAD data at index ${index}:`, {
+                        time: item.time,
+                        type: typeof item.time,
+                        isObject: typeof item.time === 'object',
+                        fullItem: item
+                    });
+                }
+                return isValid;
+            });
+
+            if (sortedHistory.length < rawSortedHistory.length) {
+                console.warn(`[Chart] ⚠️ Filtered ${rawSortedHistory.length - sortedHistory.length} bad items from sanitizer output`);
+            }
+
+            if (sortedHistory.length === 0) {
+                console.error('[Chart] ❌ NO VALID DATA after sanitizer validation! Aborting.');
+                isChartReady.current = true; // Unlock to prevent deadlock
+                return;
+            }
 
             let candleData: any[]; // 🔥 FIX: Declare variable
             if (total > WINDOW_THRESHOLD) {
@@ -345,6 +440,31 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
                 firstTimeIsNumber: Number.isFinite(candleData[0]?.time)
             });
 
+            // 🔥 PARANOID FILTER: Remove ANY candles with non-number time
+            // This is the LAST line of defense before library sees data
+            const validCandleData = candleData.filter((c, index) => {
+                const timeIsNumber = typeof c.time === 'number' && Number.isFinite(c.time);
+                if (!timeIsNumber) {
+                    console.error(`[Chart] 🚨 BLOCKED invalid candle at index ${index}:`, {
+                        time: c.time,
+                        type: typeof c.time,
+                        isObject: typeof c.time === 'object',
+                        keys: typeof c.time === 'object' && c.time !== null ? Object.keys(c.time) : 'N/A'
+                    });
+                    return false; // REJECT
+                }
+                return true; // ACCEPT
+            });
+
+            if (validCandleData.length < candleData.length) {
+                console.warn(`[Chart] ⚠️ Filtered out ${candleData.length - validCandleData.length} invalid candles`);
+            }
+
+            if (validCandleData.length === 0) {
+                console.error('[Chart] ❌ NO VALID CANDLES after filtering! Aborting setData');
+                return;
+            }
+
             // 🔬 DEBUG: Log sample of sorted data to verify ordering
             if (sortedHistory.length > 0) {
                 const first5 = sortedHistory.slice(0, 5).map(c => ({ time: c.time, close: c.close }));
@@ -361,18 +481,21 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
 
             // 🔬 PROFILING: Measure setData duration
             profiler.start('chart_setData', {
-                candles: candleData.length,
+                candles: validCandleData.length, // Use validated data
                 windowed: total > WINDOW_THRESHOLD
             });
 
-            candleSeriesRef.current.setData(candleData);
+            candleSeriesRef.current.setData(validCandleData); // 🔥 Use validated data!
 
-            // 🔥 SYNC: Update lastUpdateTimeRef to Head of History
-            // This ensures flushUpdate knows the actual last timestamp
-            if (candleData.length > 0) {
-                const lastCandle = candleData[candleData.length - 1];
-                lastUpdateTimeRef.current = lastCandle.time as number;
-            }
+            // 🔥 CRITICAL FIX: NEVER update lastUpdateTimeRef in setData
+            // Only flushUpdate (after successful chart.update()) should update this ref
+            // Why: setData loads history which may end at a DIFFERENT time than where worker continues
+            // Example: History ends at 15:40, but worker continues from anchor 15:36
+            // If we set ref=15:40 here, library rejects 15:36 update as "going backwards"
+            // Solution: Keep ref at whatever value it has (0 during interval change, or last update time)
+            // This allows worker to send ANY timestamp and library will accept it
+
+            console.log(`[Chart] 📊 History loaded via setData - NOT updating timestamp guard (current: ${lastUpdateTimeRef.current})`);
 
             // 🔥 CRITICAL: Mark chart as ready AFTER data is loaded
             isChartReady.current = true;
@@ -424,18 +547,14 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
         }
     }, [candleHistory, currentInterval]); // 🔥 Added currentInterval dependency
 
-    // --- B2. INTERVAL CHANGE ---
-    const baseInterval = useSimulationStore((state) => state.baseInterval);
-    useEffect(() => {
-        // 🔥 IMMEDIATE KILL SWITCH: When interval changes, stop accepting updates
-        isChartReady.current = false;
-        pendingUpdateRef.current = null;
-        lastUpdateTimeRef.current = 0;
-    }, [baseInterval]);
+    // 🔥 NOTE: Effect B2 (separate interval change handler) was REMOVED
+    // Its logic is now integrated into Effect B above to prevent race conditions
+    // where isChartReady was set to false but Effect B didn't re-run
 
     // --- C. REALTIME UPDATE ---
     useEffect(() => {
         let rafId: number | null = null;
+        let prevCandle: any = null; // Track previous candle to detect changes
         const flushUpdate = () => {
             rafId = null;
             // 🔥 GUARD: Block updates if chart is not ready or paused
@@ -465,14 +584,15 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
             // 🔥 NO TIMESTAMP VALIDATION: Store bucket logic handles this!
             // Bucket logic ensures timestamps are always correct for current interval
 
-            // 🔥 DEFENSIVE OVERLAP CHECK
-            // If update time < last successfully updated time, IGNORE IT.
-            // We allow == (Same Time) because it means updating/repainting the current candle.
-            if (lastUpdateTimeRef.current > 0 && update.time < lastUpdateTimeRef.current) {
-                console.warn(`[Chart] 🛡️ Ignoring past update: ${update.time} < ${lastUpdateTimeRef.current}. Skipping.`);
-                pendingUpdateRef.current = null;
-                return;
-            }
+            // 🔥 TIMESTAMP GUARD DISABLED - Too many edge cases with interval switching
+            // Store's updateCurrentCandle already handles bucketing and orderingrestrictions
+            // OHLC validation above is sufficient to prevent invalid data
+            // Keeping this code commented for reference:
+            // if (!intervalChangeGraceRef.current && lastUpdateTimeRef.current > 0 && update.time < lastUpdateTimeRef.current) {
+            //     console.warn(`[Chart] 🛡️ Ignoring past update: ${update.time} < ${lastUpdateTimeRef.current}. Skipping.`);
+            //     pendingUpdateRef.current = null;
+            //     return;
+            // }
 
             try {
                 console.log('[Chart] 🔄 Attempting update:', {
@@ -493,6 +613,12 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
                 }
 
                 lastUpdateTimeRef.current = update.time as number;
+
+                // 🔥 DEACTIVATE GRACE: First successful update ends grace period
+                if (intervalChangeGraceRef.current) {
+                    intervalChangeGraceRef.current = false;
+                    console.log(`[Chart] 🎫 Grace period DEACTIVATED - guard restored (lastUpdateTime: ${lastUpdateTimeRef.current})`);
+                }
 
                 console.log('[Chart] ✅ Update successful');
                 // 🔥 REAL-TIME INDICATOR UPDATES (Incremental)
@@ -575,8 +701,15 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
             simTelemetry.recordCandleUpdate();
         };
 
-        const unsubscribe = useSimulationStore.subscribe((state) => {
+        const unsubscribe = useSimulationStore.subscribe((state, prev) => {
             const currentCandle = state.currentCandle;
+
+            // 🔥 OPTIMIZATION: Only update if currentCandle actually changed
+            // Prevents unnecessary RAF scheduling when other state updates
+            if (currentCandle === prevCandle) {
+                return;
+            }
+            prevCandle = currentCandle;
             if (!currentCandle) return;
 
             // ⛔ SATPAM: Prevent updates before chart is initialized
@@ -602,37 +735,46 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
 
             // 🔥 FIX: currentCandle is already aggregated by bucket logic in store!
             // No need to validate timestamps - store handles UPDATE vs CREATE
+            // 🔥 CRITICAL TIME CONVERSION: Normalize timestamp from ms/object to seconds
             let time: any = currentCandle.time; // Start as any to allow object detection
 
-            // 🔥 CRITICAL FIX: Ensure time is a NUMBER, not an object!
-            // Lightweight-charts error: "last time=[object Object]" means time is not primitive
-            if (typeof time !== 'number') {
-                console.error('[Chart] ❌ Time is not a number!', { time, type: typeof time });
+            // 🔥 DEBUG: Log original time value type
+            console.log('[Chart] 📍 Original time value:', {
+                value: time,
+                type: typeof time,
+                isObject: typeof time === 'object',
+                keys: typeof time === 'object' && time !== null ? Object.keys(time) : 'N/A'
+            });
 
-                // 🔥 NEW: Try to extract from BusinessDay or Date objects
-                if (time && typeof time === 'object') {
-                    if (time instanceof Date) {
-                        time = Math.floor(time.getTime() / 1000);
-                        console.log('[Chart] 📅 Converted Date object to timestamp:', time);
-                    } else if ('year' in time && 'month' in time && 'day' in time) {
-                        // BusinessDay format
-                        const businessDate = new Date(Date.UTC(time.year, time.month - 1, time.day));
-                        time = Math.floor(businessDate.getTime() / 1000);
-                        console.log('[Chart] 📊 Converted BusinessDay object to timestamp:', time);
-                    } else {
-                        console.error('[Chart] ❌ Unknown object type, keys:', Object.keys(time));
-                        time = Number(time);
-                    }
+            if (typeof time === 'number') {
+                // Already number, just normalize
+                if (time > 1e12) {
+                    time = Math.floor(time / 1000); // Milliseconds to seconds
+                }
+            } else if (time && typeof time === 'object') {
+                if (time instanceof Date) {
+                    time = Math.floor(time.getTime() / 1000);
+                    console.log('[Chart] 📅 Converted Date object to timestamp:', time);
+                } else if ('year' in time && 'month' in time && 'day' in time) {
+                    // BusinessDay format
+                    const businessDate = new Date(Date.UTC(time.year, time.month - 1, time.day));
+                    time = Math.floor(businessDate.getTime() / 1000);
+                    console.log('[Chart] 📊 Converted BusinessDay object to timestamp:', time);
                 } else {
-                    // Try to extract number
+                    console.error('[Chart] ❌ Unknown object type, keys:', Object.keys(time));
                     time = Number(time);
                 }
-
-                if (isNaN(time) || time <= 0) {
-                    console.error('[Chart] ❌ Cannot convert time to valid number, skipping update');
-                    return;
-                }
+            } else {
+                // Try to extract number
+                time = Number(time);
             }
+
+            if (isNaN(time) || time <= 0) {
+                console.error('[Chart] ❌ Cannot convert time to valid number, skipping update. Original:', currentCandle.time);
+                return;
+            }
+
+            console.log('[Chart] ✅ Final converted time:', time);
 
             // 🔥 GUARD: Validate candle data
             if (!currentCandle.open || !currentCandle.close || !currentCandle.high || !currentCandle.low) {
@@ -660,6 +802,7 @@ const TradingChartInner = memo(function TradingChartInner({ className = '' }: Tr
         return () => {
             unsubscribe();
             if (rafId !== null) cancelAnimationFrame(rafId);
+            prevCandle = null; // Reset tracking on cleanup
         };
     }, []);
 

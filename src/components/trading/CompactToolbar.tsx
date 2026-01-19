@@ -88,69 +88,67 @@ export function CompactToolbar() {
         <div className="glassmorphism border-b border-[var(--bg-subtle-border)] px-4 z-40 relative">
             {/* Single Row: All Controls */}
             <div className="h-[56px] flex items-center gap-2 overflow-x-auto no-scrollbar">
-                {/* 🔥 NEW: Dynamic Ticker Selector (replaces hardcoded Select) */}
-                <TickerSelector
-                    selectedTicker={ticker}
-                    onTickerChange={setTicker}
-                />
 
-                <div className="w-px h-5 bg-[var(--bg-tertiary)] mx-2" />
-
-                {/* 🔥 MASTER BLUEPRINT: Dynamic Interval Buttons */}
-                <IntervalButtons />
-
-                {/* Indicators Dropdown */}
-                <div className="relative" ref={indicatorRef}>
-                    <button
-                        onClick={() => setIsIndicatorOpen(!isIndicatorOpen)}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${isIndicatorOpen
-                            ? 'bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
-                            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
-                            }`}
-                    >
-                        <Layers size={14} />
-                        <span>Indicators</span>
-                        <Dropdown size={10} className={`transform transition-transform ${isIndicatorOpen ? 'rotate-180' : ''}`} />
-                    </button>
-
-                    {isIndicatorOpen && (
-                        <Portal>
-                            <div
-                                id="indicators-dropdown"
-                                className="fixed z-50 w-56 bg-[var(--bg-secondary)] border border-[var(--bg-subtle-border)] rounded-lg shadow-xl py-1 overflow-hidden animate-in fade-in zoom-in-95 duration-100"
-                                style={{ top: indicatorPos.top, left: indicatorPos.left }}
-                            >
-                                <div className="px-3 py-2 border-b border-[var(--bg-subtle-border)] bg-[var(--bg-tertiary)]/30">
-                                    <h3 className="text-xs font-bold text-[var(--text-primary)]">Favorites</h3>
-                                </div>
-                                <div className="max-h-64 overflow-y-auto p-1">
-                                    {indicators.slice(0, 10).map((ind) => (
-                                        <button
-                                            key={ind.id}
-                                            onClick={() => toggleIndicator(ind.id)}
-                                            className={`
-                                                w-full text-left px-2 py-1.5 rounded text-xs flex items-center justify-between group
-                                                ${ind.enabled ? 'bg-[var(--accent-primary)]/10 text-[var(--accent-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'}
-                                            `}
-                                        >
-                                            <span>{ind.id.toUpperCase()}</span>
-                                            {ind.enabled && <Check size={12} />}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                        </Portal>
-                    )}
+                {/* GROUP 1: INSTRUMENT */}
+                <div className="flex items-center gap-1">
+                    <TickerSelector selectedTicker={ticker} onTickerChange={setTicker} />
                 </div>
 
-                {/* Average Calculator */}
-                <AverageCalculator />
+                <div className="w-px h-6 bg-[var(--bg-tertiary)] mx-2" />
 
-                {/* Simulation Controls */}
-                <SimulationControls />
+                {/* GROUP 2: TIME */}
+                <div className="flex items-center gap-1">
+                    <IntervalButtons />
+                </div>
 
-                {/* Scenario Selector */}
-                <ScenarioSelector />
+                <div className="w-px h-6 bg-[var(--bg-tertiary)] mx-2" />
+
+                {/* GROUP 3: STUDY */}
+                <div className="flex items-center gap-2">
+                    {/* Indicators Dropdown */}
+                    <div className="relative" ref={indicatorRef}>
+                        <button
+                            onClick={() => setIsIndicatorOpen(!isIndicatorOpen)}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${isIndicatorOpen
+                                ? 'bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
+                                : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+                                }`}
+                        >
+                            <Layers size={14} />
+                            <span>Indicators</span>
+                            <Dropdown size={10} className={`transform transition-transform ${isIndicatorOpen ? 'rotate-180' : ''}`} />
+                        </button>
+                        {isIndicatorOpen && (
+                            <Portal>
+                                <div id="indicators-dropdown" className="fixed z-50 w-56 bg-[var(--bg-secondary)] border border-[var(--bg-subtle-border)] rounded-lg shadow-xl py-1 overflow-hidden" style={{ top: indicatorPos.top, left: indicatorPos.left }}>
+                                    <div className="max-h-64 overflow-y-auto p-1">
+                                        {indicators.slice(0, 10).map((ind) => (
+                                            <button
+                                                key={ind.id}
+                                                onClick={() => toggleIndicator(ind.id)}
+                                                className={`w-full text-left px-2 py-1.5 rounded text-xs flex items-center justify-between group ${ind.enabled ? 'bg-[var(--accent-primary)]/10 text-[var(--accent-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'}`}
+                                            >
+                                                <span>{ind.id.toUpperCase()}</span>
+                                                {ind.enabled && <Check size={12} />}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </Portal>
+                        )}
+                    </div>
+
+                    <AverageCalculator />
+                </div>
+
+                <div className="w-px h-6 bg-[var(--bg-tertiary)] mx-2" />
+
+                {/* GROUP 4: REPLAY */}
+                <div className="flex items-center gap-2 bg-[var(--bg-tertiary)]/30 px-2 py-1 rounded-full border border-[var(--bg-tertiary)]/50">
+                    <SimulationControls />
+                    <div className="w-px h-4 bg-[var(--bg-tertiary)] mx-1" />
+                    <ScenarioSelector />
+                </div>
 
                 {/* Flexible Spacer */}
                 <div className="flex-1" />

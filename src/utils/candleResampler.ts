@@ -383,36 +383,82 @@ function aggregateBucket(bucket: Candle[], expectedCount?: number): ResampledCan
 }
 
 /**
- * Resample candles to a coarser interval
- * 🔥 FIX #21: Added includePartial option to include incomplete buckets
+ * Resample candles from one interval to another with OHLCV aggregation
  * 
- * @param candles - Source candles (normalized)
- * @param sourceInterval - Source interval (e.g., '1m')
- * @param targetInterval - Target interval (e.g., '5m')
- * @param includePartial - Include incomplete buckets with metadata (default: false)
+ * @param candles - Source candles (must be sorted ascending by time)
+ * @param fromInterval - Source interval  
+ * @param toInterval - Target interval
+ * @param maxWindow - Optional: Limit input to last N candles for performance (default: all candles)
  * @returns Resampled candles with metadata
+ * 
+ * Performance: O(n) where n = number of input candles
+ * With maxWindow: O(maxWindow) which is constant time for fixed window
  */
 export function resampleCandles(
     candles: Candle[],
-    sourceInterval: Interval,
-    targetInterval: Interval,
-    includePartial: boolean = false
+    fromInterval: Interval,
+    toInterval: Interval,
+    maxWindow?: number
 ): ResampledCandle[] {
+    // 🔥 PERFORMANCE: Apply windowing if specified
+    const inputCandles = maxWindow && candles.length > maxWindow
+        ? candles.slice(-maxWindow)  // Take last N candles
+        : candles;
+
+    if (inputCandles.length === 0) {
+        console.warn('[Resampler] Empty input candles');
+        return [];
+    }
+
+    // 🚀 OPTIMIZATION: No-op if intervals match
+    if (fromInterval === toInterval) {
+        // 🔥 CRITICAL: Normalize to SECONDS for consistent output
+        // Input may be MS (from rawSources) or S (from cache)
+        return inputCandles.map(c => {
+            let timeInSeconds: number;
+
+            if (typeof c.time === 'number') {
+                // Detect format: MS if > year 2286, otherwise S
+                timeInSeconds = c.time > 10_000_000_000
+                    ? Math.floor(c.time / 1000)  // MS → S
+                    : c.time;                     // Already S
+            } else if (typeof c.time === 'string') {
+                timeInSeconds = Math.floor(new Date(c.time).getTime() / 1000);  // ISO → S
+            } else {
+                console.warn('[Resampler] No-op path: Unexpected time type:', typeof c.time);
+                timeInSeconds = Math.floor(Date.now() / 1000);
+            }
+
+            return {
+                ...c,
+                time: timeInSeconds,  // GUARANTEED SECONDS
+                metadata: {
+                    isPartial: false,
+                    candleCount: 1,
+                    expectedCount: 1
+                }
+            };
+        });
+    }
+
+    // Alias parameters for backward compatibility with existing code
+    const sourceInterval = fromInterval;
+    const targetInterval = toInterval;
+
     // 🔥 FIX: Auto-normalize input to ensure consistent format
     // Handles both {t,o,h,l,c,v} and {time,open,high,low,close,volume} formats
-    const normalized = normalizeCandles(candles);
+    const normalized = normalizeCandles(inputCandles);
 
     // Validation
-    if (!isCompatible(sourceInterval, targetInterval)) {
+    if (!isCompatible(fromInterval, toInterval)) {
         throw new Error(
-            `Cannot resample from ${sourceInterval} to ${targetInterval}. ` +
-            `Compatible targets: ${INTERVAL_COMPATIBILITY[sourceInterval].join(', ')}`
+            `Cannot resample from ${fromInterval} to ${toInterval}. ` +
+            `Compatible targets: ${INTERVAL_COMPATIBILITY[fromInterval].join(', ')}`
         );
     }
 
-    if (!canSwitch(normalized, sourceInterval, targetInterval)) {
+    if (!canSwitch(normalized, fromInterval, toInterval)) {
         const potentialCandles = Math.floor(
-            (normalized.length * intervalToMinutes(sourceInterval)) /
             intervalToMinutes(targetInterval)
         );
         throw new Error(
@@ -456,7 +502,27 @@ export function resampleCandles(
 
     devLog('RESAMPLING', `[Resampler] ✅ Resampled ${candles.length} ${sourceInterval} → ${sortedAndUnique.length} ${targetInterval} candles (deduplicated)`);
 
-    return sortedAndUnique;
+    // 🔥 CRITICAL FIX: Ensure all timestamps are PRIMITIVE NUMBERS
+    // LWC will throw "[object Object]" error if time is not a primitive
+    const finalNormalized = sortedAndUnique.map(c => {
+        let timeInSeconds: number;
+
+        if (typeof c.time === 'number') {
+            // Detect format: MS if > year 2286, otherwise S
+            timeInSeconds = c.time > 10_000_000_000
+                ? Math.floor(c.time / 1000)  // MS → S
+                : c.time;                     // Already S
+        } else if (typeof c.time === 'string') {
+            timeInSeconds = Math.floor(new Date(c.time).getTime() / 1000);
+        } else {
+            console.warn('[Resampler] Unexpected time type:', typeof c.time, c.time);
+            timeInSeconds = Math.floor(Date.now() / 1000);
+        }
+
+        return { ...c, time: timeInSeconds };
+    });
+
+    return finalNormalized;
 }
 
 /**

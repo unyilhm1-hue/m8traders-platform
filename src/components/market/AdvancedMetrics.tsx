@@ -49,7 +49,7 @@ export function AdvancedMetricsDisplay({ currentPrice }: AdvancedMetricsProps) {
                 : 'text-green-400';
 
     return (
-        <div className="p-3 space-y-3 bg-[var(--bg-secondary)]">
+        <div className="h-full overflow-y-auto p-3 space-y-3 bg-[var(--bg-secondary)]">
             <h3 className="text-sm font-semibold text-[var(--text-primary)]">Advanced Metrics</h3>
 
             {/* ATR */}

@@ -102,8 +102,9 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
                     case 'TICK':
                         // Push tick to store (for orderbook/tape simulation)
                         if (data) {
-                            // 🔥 ZOMBIE CHECK: Drop ticks from old epochs
-                            if (event.data.epoch !== undefined && event.data.epoch !== epochRef.current) {
+                            // 🔥 ZOMBIE CHECK: Drop ticks from old epochs (check both top-level and payload)
+                            const tickEpoch = (event.data as any).epoch ?? (data as any).epoch;
+                            if (tickEpoch !== undefined && tickEpoch !== epochRef.current) {
                                 return;
                             }
                             pushTick(data as TickData);
@@ -267,7 +268,7 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
                 historyBuffer: params.historyBuffer,
                 simulationQueue: params.simulationQueue,
                 interval: params.interval,
-                epoch: currentEpoch, // 🔥 Pass Epoch
+                epoch: epochRef.current, // 🔥 Pass Epoch (use ref to avoid stale closure)
             });
         } else {
             console.warn('[useSimulationEngine] Worker not ready yet, cannot init with buffers');

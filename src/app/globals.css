@@ -86,13 +86,18 @@
 
 /* Base Styles */
 html {
+  height: 100%;
+  overflow: hidden;
+  /* Locks page scroll */
   font-family: var(--font-sans);
   background-color: var(--bg-primary);
   color: var(--text-primary);
 }
 
 body {
-  min-height: 100vh;
+  height: 100%;
+  overflow: hidden;
+  /* Locks page scroll */
   background-color: var(--bg-primary);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;

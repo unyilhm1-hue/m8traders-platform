@@ -165,6 +165,7 @@ interface SimulationState {
     tickBatchQueue: TickData[];
     tickBatchScheduled: boolean;
     clearTickQueue: () => void; // 🔥 FIX: Action to flush ghost ticks
+    resetLiveState: () => void; // 🔥 NEW: Reset live candle/tick state on interval switch
 
     // 🆕 Master Blueprint: Memory-Aware Actions
     loadWithSmartBuffer: (ticker: string, startDate: Date, interval: Interval) => Promise<void>;
@@ -175,6 +176,13 @@ interface SimulationState {
     // 🆕 FIX 3: Metrics actions
     updateMetrics: (metrics: Partial<SimulationState['metrics']>) => void;
     resetMetrics: () => void;
+
+    // 🔥 NEW: Data Updater Integration
+    tickerFloors: Map<string, number>;  // ticker → oldest timestamp (Unix seconds)
+    lastUpdateTime: number | null;
+    setFloorTimestamp: (ticker: string, timestamp: number) => void; // 🔥 NEW: Actions
+    updateData: (ticker: string, interval: Interval) => Promise<import('@/utils/DataUpdater').UpdateResult>;
+    updateAllTickers: () => Promise<{ successCount: number; failCount: number; results: any[] }>;
 }
 
 // ============================================================================
@@ -242,6 +250,10 @@ const initialState = {
         avgTickLatency: 0,
         lastUpdateTime: 0
     },
+
+    // 🔥 NEW: Data Updater state
+    tickerFloors: new Map<string, number>(),
+    lastUpdateTime: null,
 };
 
 // ============================================================================
@@ -573,6 +585,17 @@ export const useSimulationStore = create<SimulationState>()(
                 state.tickBatchQueue = [];
                 state.tickBatchScheduled = false; // Cancel pending frame
                 console.log('[Store] 🧹 Tick queue flushed (preventing zombie ticks)');
+            });
+        },
+
+        // 🔥 NEW: Reset live state (currentCandle/currentTick/queue) on interval switch
+        resetLiveState: () => {
+            set((state) => {
+                state.currentCandle = null;
+                state.currentTick = null;
+                state.tickBatchQueue = [];
+                state.tickBatchScheduled = false;
+                console.log('[Store] 🔄 Live state reset (currentCandle/currentTick cleared)');
             });
         },
 
@@ -971,16 +994,34 @@ export const useSimulationStore = create<SimulationState>()(
                     state.baseData = stitched.candles;
                     state.bufferData = [];
 
-                    // Set chart data (convert ms → seconds)
-                    state.candleHistory = stitched.candles.map(c => ({
-                        time: normalizeToSeconds(c.time),
-                        open: c.open,
-                        high: c.high,
-                        low: c.low,
-                        close: c.close,
-                        volume: c.volume || 0 // 🔥 PASS VOLUME
-                    }));
+                    // 🔥 CRITICAL: Update candleHistory with trimmed data
+                    // ENSURE ALL TIMESTAMPS ARE PRIMITIVES before storing
+                    state.candleHistory = stitched.candles.map((c, index) => {
+                        // Convert time to primitive number (seconds)
+                        let primitiveTime: number;
+                        if (typeof c.time === 'number') {
+                            primitiveTime = c.time > 10_000_000_000 ? Math.floor(c.time / 1000) : c.time;
+                        } else if (typeof c.time === 'string') {
+                            primitiveTime = Math.floor(new Date(c.time).getTime() / 1000);
+                        } else {
+                            console.error('[Store] Invalid time type in historySlice:', typeof c.time, c.time);
+                            primitiveTime = Math.floor(Date.now() / 1000); // Fallback
+                        }
 
+                        return {
+                            time: primitiveTime,  // GUARANTEED primitive
+                            open: c.open,
+                            high: c.high,
+                            low: c.low,
+                            close: c.close,
+                            volume: c.volume || 0, // Changed 'value' to 'volume' to match original
+                            metadata: {
+                                isPartial: !!(c as any).metadata?.isPartial,
+                                source: 'history',
+                                rawIndex: index
+                            }
+                        };
+                    });
                     // 🔥 REPLAY MODE: Trim candleHistory for tick-by-tick simulation
                     // Chart loads initial subset, worker fills rest dynamically
                     const REPLAY_HISTORY_SIZE = 200;
@@ -1007,7 +1048,7 @@ export const useSimulationStore = create<SimulationState>()(
             }
         },
 
-        // 🆕 Master Blueprint: Switch interval with COMPUTE-ON-DEMAND resampling (no cache)
+        // 🆕 Master Blueprint: Switch interval with CACHED resampling (OPTIMIZED)
         switchInterval(targetInterval): ResamplerCandle[] {
             const state = useSimulationStore.getState();
             const ticker = state.currentTicker;
@@ -1017,46 +1058,70 @@ export const useSimulationStore = create<SimulationState>()(
             }
 
             // 1. Capture Anchor Time (Precise Snapshot)
-            // Use the last candle from history to determine where we are.
-            // This runs SYNCHRONOUSLY before any data modification happens.
             let anchorTime: number | null = null;
             if (state.candleHistory.length > 0) {
                 anchorTime = state.candleHistory[state.candleHistory.length - 1].time; // Seconds
                 console.log(`[Store] ⚓ Captured Anchor Time: ${new Date(anchorTime * 1000).toLocaleString()} (${anchorTime})`);
             }
 
-            // 🔥 COMPUTE ON-DEMAND: No cache lookup, always resample fresh from raw source
-            console.log(`[Store] 🔄 Resampling ${ticker}: 1m → ${targetInterval} (on-demand)`);
-
             const rawSource = state.rawSources.get(ticker);
             if (!rawSource || !rawSource['1m']) {
                 throw new Error(`[Store] No raw 1m data for ${ticker}`);
             }
 
-            // Performance measurement
-            const startTime = performance.now();
+            // 🚀 PERFORMANCE OPTIMIZATION: Cache Check
+            const { resamplingCache } = require('@/utils/resamplingCache');
+            const sourceData = rawSource['1m'];
+            const dataHash = resamplingCache.generateDataHash(sourceData);
 
-            // Resample from 1m source (always fresh, no stale cache)
-            const resampled = resampleCandles(
-                rawSource['1m'],
-                '1m',
-                targetInterval
-            );
+            // Try to get from cache first
+            const cached = resamplingCache.get(ticker, '1m', targetInterval, dataHash);
 
-            const duration = performance.now() - startTime;
-            console.log(`[Store] ✅ Resampled in ${duration.toFixed(2)}ms (${resampled.length} candles)`);
+            let resampled: ResamplerCandle[];
+            let fromCache = false;
 
-            // ⚠️ Performance guard: Warn if resampling takes >50ms
-            if (duration > 50) {
-                console.warn(`[Store] ⚠️ Slow resample: ${duration.toFixed(2)}ms > 50ms target`);
+            if (cached) {
+                resampled = cached;
+                fromCache = true;
+                console.log(`[Store] ⚡ Cache HIT: ${ticker} 1m → ${targetInterval} (instant)`);
+            } else {
+                // Cache miss - perform resampling with windowing
+                const startTime = performance.now();
+
+                // 🔥 WINDOWING: Limit to last 600 candles for performance
+                // Full history kept for indicators that need it (handled by indicator compute)
+                const MAX_WINDOW = 600;
+
+                resampled = resampleCandles(
+                    sourceData,
+                    '1m',
+                    targetInterval,
+                    MAX_WINDOW  // Window parameter
+                );
+
+                const duration = performance.now() - startTime;
+                console.log(`[Store] 🔄 Resampled ${ticker}: 1m → ${targetInterval} in ${duration.toFixed(1)}ms (${resampled.length} candles)`);
+
+                // ⚠️ Performance guard
+                if (duration > 50) {
+                    console.warn(`[Store] ⚠️ Slow resample: ${duration.toFixed(2)}ms > 50ms target`);
+                }
+
+                // Store in cache for next time
+                resamplingCache.set(ticker, '1m', targetInterval, dataHash, resampled);
             }
 
             // Update store state
             set((state) => {
                 state.baseInterval = targetInterval;
-                state.epoch += 1; // 🔥 NEW SESSION
-                state.epoch += 1; // 🔥 NEW SESSION (Kills zombies)
+                state.epoch += 1; // 🔥 NEW SESSION (increment only once)
                 state.tempAnchorTime = anchorTime; // ✅ Save for UI consumption
+
+                // 🔥 CRITICAL: Reset live state to prevent "past update" errors
+                state.currentCandle = null;
+                state.currentTick = null;
+                state.tickBatchQueue = [];
+                state.tickBatchScheduled = false;
 
                 // 🔥 LOGIC: Dynamic History Trimming (Prevent Overlap)
                 // 🔥 LOGIC: Dynamic History Trimming (Prevent Overlap & Starvation)
@@ -1132,14 +1197,30 @@ export const useSimulationStore = create<SimulationState>()(
                 }
 
                 // Convert to chart format (ms → seconds)
-                state.candleHistory = historySlice.map(c => ({
-                    time: normalizeToSeconds(c.time),
-                    open: c.open,
-                    high: c.high,
-                    low: c.low,
-                    close: c.close,
-                    volume: c.volume || 0 // 🔥 PASS VOLUME (Resampled)
-                }));
+                // 🔥 PARANOID: Ensure ALL timestamps are pure numbers, not objects
+                state.candleHistory = historySlice.map((c, index) => {
+                    const timeNormalized = normalizeToSeconds(c.time);
+
+                    // Double-check: make sure it's a finite number
+                    if (!Number.isFinite(timeNormalized)) {
+                        console.error(`[Store] 🚨 Bad timestamp in resampled data at index ${index}:`, {
+                            original: c.time,
+                            normalized: timeNormalized,
+                            type: typeof c.time
+                        });
+                        // Skip this candle (don't add to history)
+                        return null;
+                    }
+
+                    return {
+                        time: timeNormalized,
+                        open: c.open,
+                        high: c.high,
+                        low: c.low,
+                        close: c.close,
+                        volume: c.volume || 0 // 🔥 PASS VOLUME (Resampled)
+                    };
+                }).filter(Boolean) as any[]; // Remove nulls
 
                 // 🔥 FULL DATA for Worker (Page will slice it using history length)
                 // workerQueue = baseData.slice(candleHistory.length)
@@ -1217,6 +1298,205 @@ export const useSimulationStore = create<SimulationState>()(
                 };
                 console.log('[Store] 📊 Metrics reset');
             });
+        },
+
+        // ============================================================================
+        // 🔥 NEW: Data Updater Actions
+        // ============================================================================
+
+        /**
+         * Set floor timestamp for a ticker (oldest candle time)
+         * This prevents re-downloading baseline data
+         */
+        setFloorTimestamp(ticker, timestamp) {
+            set((state) => {
+                state.tickerFloors.set(ticker, timestamp);
+                console.log(`[Store] 🔒 Floor set for ${ticker}: ${new Date(timestamp * 1000).toLocaleString()}`);
+            });
+        },
+
+        /**
+         * Update data for a ticker/interval using Clean Cut & Stitch algorithm
+         * Includes zombie protection via epoch bump and state rehydration
+         */
+        async updateData(ticker, interval) {
+            const { rawSources, tickerFloors, epoch } = get();
+
+            console.log(`[Store] 🔄 Starting data update for ${ticker} ${interval} (epoch ${epoch})`);
+
+            // \ud83d\udd25 Get current data (Store uses MS)
+            // But DataUpdater REQUIRES Seconds. So we convert.
+            const currentDataMs = rawSources.get(ticker)?.['1m'] || [];
+            const currentDataSeconds = currentDataMs.map((c: any) => ({
+                ...c,
+                t: normalizeToSeconds(c.time || c.t) // Ensure 't' is seconds
+            }));
+
+            if (currentDataSeconds.length === 0) {
+                console.warn(`[Store] ⚠️ No local data for ${ticker}. Cannot update (load initial data first).`);
+                return {
+                    updatedData: [],
+                    addedCount: 0,
+                    removedCount: 0,
+                    status: 'error' as const,
+                    message: 'No local data found. Please load initial data first.'
+                };
+            }
+
+            // \ud83d\udd25 Get floor timestamp (prevent re-downloading baseline)
+            const floorTimestamp = tickerFloors.get(ticker) || undefined;
+
+            // \ud83d\udd25 Define fetch function (mock API)
+            const fetchFunction = async (from: number, to: number): Promise<import('@/types').Candle[]> => {
+                const response = await fetch(
+                    `/api/candles?symbol=${ticker}&interval=${interval}&from=${from}&to=${to}`
+                );
+
+                if (!response.ok) {
+                    throw new Error(`API returned ${response.status}: ${response.statusText}`);
+                }
+
+                const json = await response.json();
+
+                // \ud83d\udd25 CRITICAL: Validate that API returns seconds (not ms)
+                // DataUpdater expects { t: number (seconds), o, h, l, c, v }
+                return json.data.map((item: any) => {
+                    const t = item.t || item.timestamp;
+                    if (t > 10_000_000_000) {
+                        throw new Error(`API returned milliseconds, expected seconds: ${t}`);
+                    }
+                    return {
+                        t,  // Seconds
+                        o: item.o || item.open,
+                        h: item.h || item.high,
+                        l: item.l || item.low,
+                        c: item.c || item.close,
+                        v: item.v || item.volume || 0
+                    };
+                });
+            };
+
+            // \ud83d\udd25 Import DataUpdater dynamically to avoid circular deps
+            const { smartSyncStockData } = await import('@/utils/DataUpdater');
+
+            // \ud83d\udd25 Run update with floor protection
+            const result = await smartSyncStockData(
+                currentDataSeconds as any[], // Pass Seconds version
+                fetchFunction as any,
+                {
+                    rewindStrategy: 'day',
+                    minGapHours: 1,
+                    debug: true,
+                    epoch  // Pass current epoch for logging
+                },
+                floorTimestamp  // Floor protection
+            );
+
+            // \ud83d\udd25 Update store if successful
+            if (result.status === 'success') {
+                // Convert back to Milliseconds for Store (Resampler format)
+                const updatedDataMs = result.updatedData.map(c => ({
+                    time: (c.t as number) * 1000, // Convert Seconds -> MS
+                    open: c.o,
+                    high: c.h,
+                    low: c.l,
+                    close: c.c,
+                    volume: c.v
+                }));
+
+                set((state) => {
+                    // 1. Update rawSources (store in 1m bucket)
+                    if (!state.rawSources.has(ticker)) {
+                        state.rawSources.set(ticker, { '1m': [] });
+                    }
+                    // Store as ResamplerCandle[] (MS)
+                    state.rawSources.get(ticker)!['1m'] = updatedDataMs as any[];
+
+                    // 2. Bump epoch (kill zombie ticks)
+                    state.epoch += 1;
+
+                    // 3. Reset live state
+                    state.currentCandle = null;
+                    state.currentTick = null;
+                    state.tickBatchQueue = [];
+                    state.tickBatchScheduled = false;
+
+                    // 4. Update metadata
+                    state.lastUpdateTime = Math.floor(Date.now() / 1000);
+
+                    console.log(`[Store] ✅ Update successful (epoch now ${state.epoch})`);
+                    console.log(`[Store]    - Added: ${result.addedCount} candles`);
+                    console.log(`[Store]    - Removed: ${result.removedCount} candles`);
+                });
+
+                // 5. Rehydrate candleHistory if user viewing this ticker/interval
+                const currentTicker = get().currentTicker;
+                const currentInterval = get().baseInterval;
+
+                if (ticker === currentTicker && interval === currentInterval) {
+                    // Trigger interval switch to rebuild candleHistory
+                    get().switchInterval(interval);
+                    console.log('[Store] 🔄 Rehydrated candleHistory with updated data');
+                }
+
+                // TODO: Persist to IndexedDB if needed
+                // await saveToIndexedDB(ticker, interval, result.updatedData);
+            } else {
+                console.log(`[Store] ℹ️ Update result: ${result.status} - ${result.message}`);
+            }
+
+            return result;
+        },
+
+        /**
+         * Update ALL 1m tickers available in the system
+         * Sequentially processes updates to avoid browser/network overload
+         */
+        async updateAllTickers() {
+            const { epoch, rawSources, currentTicker } = get();
+            console.log(`[Store] 🚀 Starting Batch Update (Epoch ${epoch})`);
+
+            try {
+                // 🔥 CALL SERVER-SIDE BATCH API
+                // This bypasses client LRU limits and ensures persistence to disk
+                const response = await fetch('/api/simulation/batch-update', { method: 'POST' });
+
+                if (!response.ok) {
+                    throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+                }
+
+                const result = await response.json();
+
+                if (!result.success) {
+                    throw new Error(result.error || 'Unknown server error');
+                }
+
+                const summary = result.summary;
+                console.log(`[Store] 🏁 Batch Update Complete.`, summary);
+
+                // 🔥 CRITICAL: Reload CURRENT ticker if it was updated
+                // The file on disk has changed, but our RAM cache might be stale OR empty
+                if (currentTicker && rawSources.has(currentTicker)) {
+                    console.log(`[Store] 🔄 Reloading active ticker ${currentTicker} to reflect batch update...`);
+                    // Force reload by removing from cache and calling switchInterval (which triggers load)
+                    set(state => {
+                        state.rawSources.delete(currentTicker);
+                    });
+
+                    // Trigger reload logic
+                    get().switchInterval('1m');
+                }
+
+                return {
+                    successCount: summary.successCount,
+                    failCount: summary.failCount + (summary.errorCount || 0),
+                    results: result.results
+                };
+
+            } catch (error) {
+                console.error('[Store] 💥 Batch Update Crashed:', error);
+                return { successCount: 0, failCount: 1, results: [], error };
+            }
         },
     }))
 );

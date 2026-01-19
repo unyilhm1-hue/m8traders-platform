@@ -8,6 +8,8 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { DrawingSidebar } from '@/components/chart/DrawingSidebar';
 import { CompactToolbar } from '@/components/trading/CompactToolbar';
+import { ChartStatusOverlay } from '@/components/chart/ChartStatusOverlay';
+import MultiPaneTradingChart from '@/components/chart/MultiPaneTradingChart';
 import { PositionDisplay, PendingOrders } from '@/components/trading';
 import { EnhancedOrderPanel } from '@/components/trading/EnhancedOrderPanel';
 import { MarketDataPanel } from '@/components/market/MarketDataPanel';
@@ -129,9 +131,9 @@ function SimDemoPageContent() {
             // This prevents the worker from sending stale interval data during transition
             engine.pause();
 
-            // 🧹 LAYER 1.5: FLUSH QUEUE - Remove stale ticks from store queue
-            // Any ticks sent by worker just before pause are now "zombies". Kill them.
-            useSimulationStore.getState().clearTickQueue();
+            // 🧹 LAYER 1.5: RESET LIVE STATE - Clear stale candle/ticks from store
+            // Reset currentCandle, currentTick, and tick queue to prevent "past update" errors
+            useSimulationStore.getState().resetLiveState();
 
             console.log(`[SimDemoPage] ✅ Worker paused & queues flushed`);
 
@@ -329,45 +331,84 @@ function SimDemoPageContent() {
         }
     }, [currentPrice, checkAndFillOrders]);
 
+    // Mobile Tab State
+    const [mobileTab, setMobileTab] = useState<'chart' | 'trading'>('chart');
+
     return (
-        <div className="h-[100dvh] flex flex-col overflow-hidden">
+        <div className="h-full flex flex-col overflow-hidden bg-[var(--bg-primary)]">
             {/* Compact Toolbar */}
-            <CompactToolbar />
+            <div className="shrink-0">
+                <CompactToolbar />
+            </div>
 
             {/* Main Layout */}
-            <div className="flex-1 flex overflow-hidden min-h-0">
-                {/* Left: Drawing Sidebar */}
-                <DrawingSidebar />
+            <div className="flex-1 flex overflow-hidden min-h-0 relative">
+
+                {/* Visual Feedback Overlay */}
+                <ChartStatusOverlay />
+
+                {/* Left: Drawing Sidebar (Desktop Only) */}
+                <div className="hidden md:block shrink-0">
+                    <DrawingSidebar />
+                </div>
 
                 {/* Center: Chart Area */}
-                <div className="flex-1 flex flex-col overflow-hidden min-h-0 min-w-0">
-                    <div className="flex-1 min-h-0">
-                        <TradingChart />
+                {/* On mobile, hidden if trading tab is active */}
+                <div className={`flex-1 flex flex-col overflow-hidden min-h-0 min-w-0 relative 
+                    ${mobileTab === 'trading' ? 'hidden md:flex' : 'flex'}`}>
+                    <div className="flex-1 min-h-0 relative">
+                        {/* <TradingChart /> */}
+                        <MultiPaneTradingChart />
+
+                        {/* Mobile Drawing Tools Trigger (Optional - keeping simple for now) */}
                     </div>
                 </div>
 
                 {/* Right: Trading Panel */}
-                <aside className="w-[300px] glassmorphism border-l border-[var(--bg-subtle-border)] flex flex-col overflow-hidden bg-[var(--bg-secondary)]/90 backdrop-blur-md">
+                {/* On mobile, full width if trading tab is active */}
+                <aside className={`
+                    w-full md:w-[320px] h-full glassmorphism border-l border-[var(--bg-subtle-border)] 
+                    flex flex-col overflow-hidden bg-[var(--bg-secondary)]/95 backdrop-blur-md
+                    absolute md:relative z-20 inset-0 md:inset-auto
+                    ${mobileTab === 'trading' ? 'flex' : 'hidden md:flex'}
+                `}>
+                    {/* Mobile Header for Trading Panel */}
+                    <div className="md:hidden flex items-center justify-between p-3 border-b border-[var(--bg-tertiary)] bg-[var(--bg-secondary)]">
+                        <span className="font-semibold text-[var(--text-primary)]">Trading Panel</span>
+                        <button
+                            onClick={() => setMobileTab('chart')}
+                            className="p-1 px-3 text-xs bg-[var(--bg-tertiary)] rounded text-[var(--text-secondary)]"
+                        >
+                            Close
+                        </button>
+                    </div>
+
                     {/* Account Summary (Condensed) */}
-                    <div className="p-4 border-b border-[var(--bg-tertiary)]">
-                        <div className="flex items-center justify-between mb-3">
-                            <div>
-                                <div className="text-xs text-[var(--text-tertiary)]">Balance</div>
-                                <div className="text-lg font-bold text-[var(--text-primary)]">
-                                    {formatIDR(balance)}
-                                </div>
+                    <div className="p-3 border-b border-[var(--bg-tertiary)] shrink-0 flex flex-col gap-2 bg-[var(--bg-secondary)]">
+                        {/* Row 1: Price & P/L */}
+                        <div className="flex justify-between items-center">
+                            <div className="flex items-baseline gap-2">
+                                <span className="text-lg font-bold text-[var(--text-primary)] font-mono tracking-tight">
+                                    {currentPrice ? `Rp ${currentPrice.toLocaleString('id-ID')}` : 'Rp 0'}
+                                </span>
+                                <span className="text-[10px] text-[var(--accent-primary)] font-semibold bg-[var(--accent-primary)]/10 px-1.5 py-0.5 rounded tracking-wide">LIVE</span>
                             </div>
-                            <div className="text-right">
-                                <div className="text-xs text-[var(--text-tertiary)]">P/L</div>
-                                <div className="text-lg font-bold text-green-500">+2.5%</div>
+                            <div className="text-right flex items-center gap-2">
+                                <span className="text-xs text-[var(--text-tertiary)] uppercase tracking-wider">Unrealized P/L</span>
+                                <div className="text-sm font-bold text-green-500 font-mono">+2.5%</div>
                             </div>
                         </div>
 
-                        {/* Current Price */}
-                        <div className="pt-3 border-t border-[var(--bg-tertiary)]">
-                            <div className="text-xs text-[var(--text-tertiary)] mb-1">Current Price</div>
-                            <div className="text-2xl font-bold text-[var(--text-primary)]">
-                                Rp {(currentPrice || 0).toLocaleString('id-ID', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                        {/* Row 2: Balance details (Tiny) */}
+                        <div className="flex items-center gap-4 text-xs text-[var(--text-secondary)] border-t border-[var(--bg-tertiary)]/50 pt-2">
+                            <div className="flex items-center gap-1.5">
+                                <span className="text-[var(--text-tertiary)] uppercase tracking-wider text-[10px]">Balance</span>
+                                <span className="text-[var(--text-primary)] font-mono font-medium">{formatIDR(balance)}</span>
+                            </div>
+                            <div className="w-px h-3 bg-[var(--bg-tertiary)]" />
+                            <div className="flex items-center gap-1.5">
+                                <span className="text-[var(--text-tertiary)] uppercase tracking-wider text-[10px]">Equity</span>
+                                <span className="text-[var(--text-primary)] font-mono font-medium">{formatIDR(balance)}</span>
                             </div>
                         </div>
                     </div>
@@ -410,13 +451,39 @@ function SimDemoPageContent() {
                     </div>
 
                     {/* Enhanced Order Panel */}
-                    <div className="border-t border-[var(--bg-tertiary)]">
+                    <div className="border-t border-[var(--bg-tertiary)] shrink-0 pb-[env(safe-area-inset-bottom)]">
                         <EnhancedOrderPanel currentPrice={currentPrice} />
                     </div>
                 </aside>
 
-                {/* Market Data Panel */}
-                <MarketDataPanel />
+                {/* Market Data Panel (Hidden on mobile for simplicity, or could be another tab) */}
+                <div className="hidden lg:block h-full">
+                    <MarketDataPanel />
+                </div>
+            </div>
+
+            {/* Mobile Bottom Navigation */}
+            <div className="md:hidden border-t border-[var(--bg-subtle-border)] bg-[var(--bg-secondary)] flex items-center justify-around p-2 pb-[env(safe-area-inset-bottom)] shrink-0 z-50">
+                <button
+                    onClick={() => setMobileTab('chart')}
+                    className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors ${mobileTab === 'chart'
+                        ? 'text-[var(--accent-primary)] bg-[var(--accent-primary)]/10'
+                        : 'text-[var(--text-tertiary)]'
+                        }`}
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18" /><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3" /></svg>
+                    <span className="text-[10px] font-medium">Chart</span>
+                </button>
+                <button
+                    onClick={() => setMobileTab('trading')}
+                    className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors ${mobileTab === 'trading'
+                        ? 'text-[var(--accent-primary)] bg-[var(--accent-primary)]/10'
+                        : 'text-[var(--text-tertiary)]'
+                        }`}
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20" /><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+                    <span className="text-[10px] font-medium">Trading</span>
+                </button>
             </div>
         </div>
     );

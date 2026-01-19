@@ -82,23 +82,88 @@ async function loadMergedFile(ticker: string, interval: Interval): Promise<Merge
     }
 
     const data = await response.json();
-    console.log(`[HybridStitcher] ✅ Loaded ${data.candles.length} candles from ${filename}`);
 
-    return data;
+    // 🔥 FIX: Handle both legacy wrapper and new flat array formats
+    let candles = [];
+    let metadata = {
+        data_start: new Date().toISOString(),
+        data_end: new Date().toISOString(),
+        total_candles: 0,
+        duration_days: 0
+    };
+
+    if (Array.isArray(data)) {
+        // Handle Flat Array (from recent Batch Update)
+        candles = data;
+        if (candles.length > 0) {
+            // Reconstruct minimal metadata from first/last candles
+            // Check if candle uses 't' (seconds) or 'timestamp' (string)
+            const first = candles[0];
+            const last = candles[candles.length - 1];
+
+            const getIso = (c: any) => {
+                if (c.timestamp) return c.timestamp;
+                if (typeof c.t === 'number') return new Date(c.t * 1000).toISOString();
+                return new Date().toISOString();
+            };
+
+            metadata = {
+                data_start: getIso(first),
+                data_end: getIso(last),
+                total_candles: candles.length,
+                duration_days: 0 // Recalculate if needed, but stitcher mostly needs start/end
+            };
+        }
+    } else {
+        // Handle Standard Structure
+        candles = data.candles || [];
+        metadata = data.metadata || metadata;
+    }
+
+    // Return normalized structure
+    return {
+        ticker: cleanTicker,
+        interval: interval,
+        metadata: metadata,
+        candles: candles
+    };
 }
+
 
 /**
  * Convert merged file candles to ResamplerCandle format
+ * Handles both formats:
+ * - { timestamp: "ISO string", ... } (original format)
+ * - { t: unixSeconds, o, h, l, c, v } (new flat array format)
  */
-function convertToResamplerFormat(candles: MergedFileData['candles']): ResampledCandle[] {
-    return candles.map(c => ({
-        time: new Date(c.timestamp).getTime(), // Convert to ms timestamp
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-        volume: c.volume
-    }));
+function convertToResamplerFormat(candles: any[]): ResampledCandle[] {
+    return candles.map(c => {
+        // Determine time in milliseconds
+        let timeMs: number;
+
+        if (c.timestamp) {
+            // ISO string format
+            timeMs = new Date(c.timestamp).getTime();
+        } else if (typeof c.t === 'number') {
+            // Unix seconds format - convert to milliseconds
+            timeMs = c.t * 1000;
+        } else if (typeof c.time === 'number') {
+            // Already in milliseconds
+            timeMs = c.time;
+        } else {
+            console.warn('[HybridStitcher] Invalid candle time format:', c);
+            timeMs = Date.now(); // Fallback
+        }
+
+        return {
+            time: timeMs,
+            open: c.open || c.o,
+            high: c.high || c.h,
+            low: c.low || c.l,
+            close: c.close || c.c,
+            volume: c.volume || c.v || 0
+        };
+    });
 }
 
 /**
@@ -142,14 +207,11 @@ async function stitchLongAndShort(config: StitchConfig): Promise<StitchedData> {
         return {
             candles: resampled,
             metadata: {
-                ticker: config.ticker,
-                interval: config.targetInterval,
-                totalCandles: resampled.length,
                 historicalDays: 730,
-                recentDays: 0,
                 stitchPoint: 0,
-                historySource: '60m',
-                headSource: 'none'
+                historySource: 'native',
+                tailCandles: resampled.length,
+                headCandles: 0
             }
         };
     }
