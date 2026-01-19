@@ -67,6 +67,18 @@ export const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
                 secondsVisible: false,
                 borderColor: '#2B2B43',
                 rightOffset: 5,
+                // ✅ CRITICAL FIX: Force UTC timestamp mode (prevent BusinessDay object conversion)
+                // Without this, LWC converts numeric timestamps to BusinessDay {year, month, day}
+                // causing "[object Object]" errors during interval switching
+                tickMarkFormatter: (time: Time) => {
+                    // Force treating time as UTCTimestamp (number) instead of BusinessDay
+                    const date = new Date((time as number) * 1000);
+                    const month = String(date.getMonth() + 1).padStart(2, '0');
+                    const day = String(date.getDate()).padStart(2, '0');
+                    const hours = String(date.getHours()).padStart(2, '0');
+                    const minutes = String(date.getMinutes()).padStart(2, '0');
+                    return `${month}/${day} ${hours}:${minutes}`;
+                },
             },
             rightPriceScale: {
                 borderColor: '#2B2B43',

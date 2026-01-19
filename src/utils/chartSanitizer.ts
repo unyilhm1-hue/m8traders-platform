@@ -82,7 +82,17 @@ export function sanitizeDataForChart(rawData: any[]): ChartDataPoint[] {
     });
 
     // Filter data sampah (time invalid)
-    const validData = mapped.filter(d => !isNaN(d.time) && d.time > 0);
+    const validData = mapped.filter(d => {
+        if (isNaN(d.time) || d.time <= 0) return false;
+
+        // 🔥 CRITICAL: Ensure time is PRIMITIVE NUMBER (not wrapped object)
+        if (typeof d.time !== 'number' || !Number.isFinite(d.time)) {
+            console.error('[Sanitizer] ❌ Rejected non-primitive time:', d.time, typeof d.time);
+            return false;
+        }
+
+        return true;
+    });
 
     if (validData.length === 0) {
         console.error('[Sanitizer] ❌ No valid data after filtering!');

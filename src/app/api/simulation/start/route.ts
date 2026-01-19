@@ -185,6 +185,7 @@ export async function GET(request: Request) {
                 success: true,
                 data: {
                     ticker: requestedTicker,
+                    interval: requestedInterval,  // ✅ SSoT Phase 1: Always explicit
                     candles: cached.data,
                     metadata: {
                         cached: true,
@@ -469,6 +470,7 @@ export async function GET(request: Request) {
             success: true,
             data: {
                 ticker,
+                interval: requestedInterval,  // ✅ SSoT Phase 1: Always explicit
                 candles: processedCandles,
                 metadata: {
                     total: rawData.length,

@@ -472,10 +472,15 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
     switch (type) {
         case 'INIT_DATA':
             if (event.data.historyBuffer && event.data.simulationQueue) {
+                // 🔥 SSoT Phase 1: Log interval fallback
+                const interval = event.data.interval || (() => {
+                    engine.log('warn', '[SSoT] INTERVAL FALLBACK: No interval provided in smart buffer init, defaulting to 1m');
+                    return '1m';
+                })();
                 engine.init(
                     event.data.historyBuffer,
                     event.data.simulationQueue,
-                    event.data.interval || '1m'
+                    interval
                 );
             } else if (event.data.candles && event.data.candles.length > 0) {
                 // Legacy support: Treat all candles as simulation queue, empty history
@@ -495,7 +500,9 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
                     pattern: 'doji' as any
                 }));
 
-                console.warn('[PhysicsWorker] ⚠️ Using legacy INIT_DATA (no history buffer)');
+                // 🔥 SSoT Phase 1: Log legacy path usage
+                engine.log('warn', '[SSoT] LEGACY PATH: No history buffer, using all candles as simulation queue');
+                engine.log('warn', '[SSoT] INTERVAL DEFAULT: Using fallback 1m for legacy init');
                 engine.init([], enriched, '1m');
             } else {
                 console.error('[PhysicsWorker] Invalid INIT_DATA payload');
@@ -538,12 +545,16 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
                             engine.log('info', `[PhysicsWorker] ✅ Scenario loaded: ${scenario.candles.length} candles`);
 
                             // Initialize engine with loaded data
-                            // Assuming scenarios always use 1m interval for now, or get from metadata
+                            // 🔥 SSoT Phase 1: Log scenario interval fallback
+                            const scenarioInterval = scenario.interval || (() => {
+                                engine.log('warn', '[SSoT] SCENARIO FALLBACK: No interval metadata in scenario, defaulting to 1m');
+                                return '1m';
+                            })();
                             engine.init(
                                 [], // History buffer empty for scenarios usually? Or should we split?
                                 // For simplicity in scenario mode, we treat all as simulation queue
                                 scenario.candles,
-                                scenario.interval || '1m'
+                                scenarioInterval
                             );
 
                             // Notify main thread

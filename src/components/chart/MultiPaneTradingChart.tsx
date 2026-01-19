@@ -351,7 +351,17 @@ function MultiPaneTradingChartInner() {
 
             // Simple validation
             let t = c.time;
-            if (typeof t !== 'number') return;
+
+            // ✅ CRITICAL: Reject non-primitive time (prevent [object Object] error)
+            if (typeof t !== 'number') {
+                console.error('[MultiPane] ❌ REJECTED update: time is not primitive number', {
+                    time: t,
+                    type: typeof t,
+                    candle: c
+                });
+                return;
+            }
+
             if (t > 1e12) t = Math.floor(t / 1000);
 
             pendingUpdateRef.current = {

@@ -19,6 +19,7 @@ import {
 import { devLog } from '@/utils/debug'; // Added
 import { getCached, loadWithBuffer, invalidateCache, type CachedData } from '@/utils/smartBuffer';
 import { normalizeToSeconds } from '@/utils/timeUtils'; // 🔥 NEW: Centralized timestamp utils
+import { assertSeconds } from '@/utils/timeAssertions'; // ✅ Phase 2: Boundary assertions
 
 // 🚀 FIX: Enable MapSet plugin for Immer to support Map in store
 enableMapSet();
@@ -631,6 +632,19 @@ export const useSimulationStore = create<SimulationState>()(
                     // 🔥 FIX C: Use centralized time normalization
                     const timeInSeconds = normalizeTimestamp(rawTime);
 
+                    // ✅ Phase 2: Assert time is valid seconds before storing
+                    assertSeconds(timeInSeconds, `setCandleHistory[${index}]`);
+
+                    // 🔥 CRITICAL: Ensure time is PRIMITIVE NUMBER (not object wrapper)
+                    if (typeof timeInSeconds !== 'number' || !Number.isFinite(timeInSeconds)) {
+                        console.error(`[Store] ❌ REJECTED candle ${index}: time is not primitive number`, {
+                            rawTime,
+                            normalized: timeInSeconds,
+                            type: typeof timeInSeconds
+                        });
+                        return; // Skip this candle
+                    }
+
                     // Push data bersih
                     converted.push({
                         time: timeInSeconds,
@@ -718,6 +732,9 @@ export const useSimulationStore = create<SimulationState>()(
                             : 0;
 
                         if (current.time > lastHistoryTime) {
+                            // ✅ Phase 2: Assert time is valid seconds before appending
+                            assertSeconds(current.time, 'updateCurrentCandle:append');
+
                             // Previous candle is complete and in correct order, add it to history
                             state.candleHistory.push(current);
                         } else {

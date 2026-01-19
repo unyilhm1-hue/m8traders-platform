@@ -184,13 +184,14 @@ export function useSimulationEngine(options: SimulationEngineOptions = {}) {
                 throw new Error(result.error || 'Failed to load data');
             }
 
-            const { ticker, date, candles, candleCount } = result.data;
-            console.log(`[useSimulationEngine] Loaded ${ticker} ${date}: ${candleCount} candles`);
+            const { ticker, date, candles, candleCount, interval } = result.data;
+            console.log(`[useSimulationEngine] Loaded ${ticker} ${date}: ${candleCount} candles, interval: ${interval || '1m'}`);
 
-            // Send data to Worker
+            // ✅ SSoT Phase 1: Send explicit interval from API
             worker.postMessage({
                 type: 'INIT_DATA',
                 candles,
+                interval: interval || '1m',  // Explicit with fallback logged in API
             });
 
         } catch (error) {

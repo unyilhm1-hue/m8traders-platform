@@ -8,11 +8,14 @@
  * - Time-based bucketing with snap-to-grid
  * - Data span constraint checking (minimum 10 candles rule)
  * - Accurate OHLCV aggregation
+ * - Phase 2: Feature-flagged strict validation
  * 
  * @module candleResampler
  */
 
 import { devLog } from '@/utils/debug';
+import { FEATURE_FLAGS } from '@/config/featureFlags';
+import { validateTimeOnlyString } from '@/utils/timeAssertions';
 
 export interface Candle {
     time: string | number;
@@ -187,9 +190,15 @@ export function canSwitch(
  * 🚀 DEFENSIVE: Guard against undefined/null values
  */
 function parseTime(time: string | number | undefined): number {
-    // Guard against undefined/null
+    // 🔥 Phase 2: Strict validation for undefined/null
     if (time === undefined || time === null) {
-        console.warn('[Resampler] parseTime received undefined/null, using current time');
+        const msg = '[SSoT] TIME FALLBACK: parseTime received undefined/null';
+
+        if (FEATURE_FLAGS.TIME_SSOT_STRICT) {
+            throw new Error(`${msg} - STRICT MODE: Cannot parse invalid timestamp`);
+        }
+
+        console.warn(`${msg}, using Date.now()`);
         return Date.now();
     }
 
@@ -202,16 +211,29 @@ function parseTime(time: string | number | undefined): number {
         return time < THRESHOLD ? time * 1000 : time;
     }
 
-    // Handle HH:MM or HH:MM:SS format
-    if (time.includes(':')) {
-        const [hours, minutes] = time.split(':').map(Number);
-        const date = new Date();
-        date.setHours(hours, minutes, 0, 0);
-        return date.getTime();
+    // 🔥 Phase 2: Validate time-only strings in strict mode
+    if (typeof time === 'string') {
+        validateTimeOnlyString(time, 'parseTime');
+
+        // Handle HH:MM or HH:MM:SS format (with warning already logged)
+        if (time.includes(':') && !time.includes('T') && !time.includes('-')) {
+            const [hours, minutes] = time.split(':').map(Number);
+            const date = new Date();
+            date.setHours(hours, minutes, 0, 0);
+            return date.getTime();
+        }
+
+        // Handle ISO string
+        return new Date(time).getTime();
     }
 
-    // Handle ISO string
-    return new Date(time).getTime();
+    // Fallback for unexpected types
+    const msg = `[SSoT] Unexpected time type: ${typeof time}`;
+    if (FEATURE_FLAGS.TIME_SSOT_STRICT) {
+        throw new Error(`${msg} - STRICT MODE`);
+    }
+    console.warn(msg);
+    return Date.now();
 }
 
 /**
@@ -425,7 +447,14 @@ export function resampleCandles(
             } else if (typeof c.time === 'string') {
                 timeInSeconds = Math.floor(new Date(c.time).getTime() / 1000);  // ISO → S
             } else {
-                console.warn('[Resampler] No-op path: Unexpected time type:', typeof c.time);
+                // 🔥 Phase 2: Strict validation for unexpected types
+                const msg = `[SSoT] TIME FALLBACK: Unexpected time type in no-op path: ${typeof c.time}`;
+
+                if (FEATURE_FLAGS.TIME_SSOT_STRICT) {
+                    throw new Error(`${msg} - STRICT MODE`);
+                }
+
+                console.warn(msg);
                 timeInSeconds = Math.floor(Date.now() / 1000);
             }
 
@@ -515,7 +544,14 @@ export function resampleCandles(
         } else if (typeof c.time === 'string') {
             timeInSeconds = Math.floor(new Date(c.time).getTime() / 1000);
         } else {
-            console.warn('[Resampler] Unexpected time type:', typeof c.time, c.time);
+            // 🔥 Phase 2: Strict validation for unexpected types
+            const msg = `[SSoT] TIME FALLBACK: Unexpected time type after aggregation: ${typeof c.time}`;
+
+            if (FEATURE_FLAGS.TIME_SSOT_STRICT) {
+                throw new Error(`${msg} - STRICT MODE: ${JSON.stringify(c.time)}`);
+            }
+
+            console.warn(msg, c.time);
             timeInSeconds = Math.floor(Date.now() / 1000);
         }
 
